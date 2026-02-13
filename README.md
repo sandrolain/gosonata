@@ -2,10 +2,10 @@
 
 [![Go Version](https://img.shields.io/github/go-mod/go-version/sandrolain/gosonata)](https://go.dev/doc/go1.26)
 [![GoDoc](https://godoc.org/github.com/sandrolain/gosonata?status.svg)](https://godoc.org/github.com/sandrolain/gosonata)
-[![Test](https://github.com/sandrolain/gosonata/workflows/Test/badge.svg)](https://github.com/sandrolain/gosonata/actions?query=workflow%3ATest)
+<!--[![Test](https://github.com/sandrolain/gosonata/workflows/Test/badge.svg)](https://github.com/sandrolain/gosonata/actions?query=workflow%3ATest)
 [![Lint](https://github.com/sandrolain/gosonata/workflows/Lint/badge.svg)](https://github.com/sandrolain/gosonata/actions?query=workflow%3ALint)
 [![Security](https://github.com/sandrolain/gosonata/workflows/Security/badge.svg)](https://github.com/sandrolain/gosonata/actions?query=workflow%3ASecurity)
-[![codecov](https://codecov.io/gh/sandrolain/gosonata/branch/main/graph/badge.svg)](https://codecov.io/gh/sandrolain/gosonata)
+[![codecov](https://codecov.io/gh/sandrolain/gosonata/branch/main/graph/badge.svg)](https://codecov.io/gh/sandrolain/gosonata)-->
 [![Go Report Card](https://goreportcard.com/badge/github.com/sandrolain/gosonata)](https://goreportcard.com/report/github.com/sandrolain/gosonata)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
