@@ -1,0 +1,12 @@
+{
+  "name": "gosonata-conformance-tests",
+  "version": "1.0.0",
+  "description": "Conformance tests comparing GoSonata with JSONata JavaScript",
+  "private": true,
+  "dependencies": {
+    "jsonata": "file:../../thirdy/jsonata"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

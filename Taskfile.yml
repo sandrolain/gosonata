@@ -1,0 +1,266 @@
+version: "3"
+
+vars:
+  GO_FILES:
+    sh: find . -name '*.go' -not -path "./vendor/*" -not -path "./thirdy/*"
+  COVERAGE_FILE: coverage.out
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  # Development tasks
+  dev:
+    desc: Run development server/watcher
+    cmds:
+      - echo "Development mode - watching for changes..."
+      - air # requires air to be installed (go install github.com/cosmtrek/air@latest)
+
+  # Build tasks
+  build:
+    desc: Build the project
+    cmds:
+      - go build -v ./...
+
+  install:
+    desc: Install go dependencies
+    cmds:
+      - go mod download
+      - go mod tidy
+
+  # Testing tasks
+  test:
+    desc: Run all tests
+    cmds:
+      - go test -v -race ./...
+
+  test:unit:
+    desc: Run unit tests only
+    cmds:
+      - go test -v -race ./tests/unit/...
+
+  test:integration:
+    desc: Run integration tests only
+    cmds:
+      - go test -v -race ./tests/integration/...
+
+  test:conformance:
+    desc: Run conformance tests (JSONata test suite)
+    cmds:
+      - go test -v -race ./tests/conformance/...
+
+  test:comparison:
+    desc: Run comparison tests with JavaScript implementation
+    cmds:
+      - go test -v -race ./tests/comparison/...
+
+  test:watch:
+    desc: Run tests on file changes
+    cmds:
+      - gotestsum --watch
+
+  # Coverage tasks
+  coverage:
+    desc: Generate coverage report
+    cmds:
+      - go test -race -coverprofile={{.COVERAGE_FILE}} -covermode=atomic ./...
+      - go tool cover -html={{.COVERAGE_FILE}} -o coverage.html
+      - 'echo "Coverage report generated: coverage.html"'
+
+  coverage:report:
+    desc: Show coverage summary
+    cmds:
+      - go test -race -coverprofile={{.COVERAGE_FILE}} -covermode=atomic ./...
+      - go tool cover -func={{.COVERAGE_FILE}}
+
+  coverage:check:
+    desc: Check if coverage meets threshold (90%)
+    cmds:
+      - |
+        go test -race -coverprofile={{.COVERAGE_FILE}} -covermode=atomic ./...
+        COVERAGE=$(go tool cover -func={{.COVERAGE_FILE}} | tail -1 | awk '{print $3}' | sed 's/%//')
+        echo "Total coverage: $COVERAGE%"
+        if (( $(echo "$COVERAGE < 90.0" | bc -l) )); then
+          echo "❌ Coverage $COVERAGE% is below 90% threshold"
+          exit 1
+        else
+          echo "✅ Coverage $COVERAGE% meets 90% threshold"
+        fi
+
+  # Benchmark tasks
+  bench:
+    desc: Run all benchmarks
+    cmds:
+      - go test -bench=. -benchmem -run=^$ ./... | tee benchmark.txt
+
+  bench:parser:
+    desc: Benchmark parser performance
+    cmds:
+      - go test -bench=BenchmarkParser -benchmem ./tests/benchmark/...
+
+  bench:evaluator:
+    desc: Benchmark evaluator performance
+    cmds:
+      - go test -bench=BenchmarkEval -benchmem ./tests/benchmark/...
+
+  # Linting tasks
+  lint:
+    desc: Run all linters
+    cmds:
+      - task: lint:golangci
+      - task: lint:gosec
+      - task: lint:vet
+
+  lint:golangci:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run --timeout=5m
+
+  lint:gosec:
+    desc: Run gosec security scanner
+    cmds:
+      - gosec -no-fail ./...
+
+  lint:vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  lint:fix:
+    desc: Auto-fix linting issues
+    cmds:
+      - golangci-lint run --fix
+
+  # Security tasks
+  security:
+    desc: Run all security scans
+    cmds:
+      - task: security:gosec
+      - task: security:trivy
+
+  security:gosec:
+    desc: Run gosec security scanner
+    cmds:
+      - gosec -fmt=json -out=gosec-report.json -no-fail ./...
+      - 'echo "Security report: gosec-report.json"'
+
+  security:trivy:
+    desc: Run Trivy vulnerability scanner
+    cmds:
+      - trivy fs --severity HIGH,CRITICAL --format table .
+
+  # Format tasks
+  fmt:
+    desc: Format code with gofmt
+    cmds:
+      - gofmt -s -w {{.GO_FILES}}
+
+  fmt:check:
+    desc: Check if code is formatted
+    cmds:
+      - |
+        UNFORMATTED=$(gofmt -l {{.GO_FILES}})
+        if [ -n "$UNFORMATTED" ]; then
+          echo "The following files are not formatted:"
+          echo "$UNFORMATTED"
+          exit 1
+        fi
+
+  # Documentation tasks
+  doc:
+    desc: Generate and serve documentation
+    cmds:
+      - godoc -http=:6060
+      - echo "Documentation available at http://localhost:6060/pkg/github.com/sandrolain/gosonata/"
+
+  doc:generate:
+    desc: Generate documentation files
+    cmds:
+      - go doc -all ./... > docs/api.txt
+
+  # Clean tasks
+  clean:
+    desc: Clean build artifacts and temporary files
+    cmds:
+      - rm -f {{.COVERAGE_FILE}} coverage.html
+      - rm -f benchmark.txt
+      - rm -f gosec-report.json
+      - go clean -cache -testcache -modcache
+      - echo "Cleaned build artifacts"
+
+  # CI/CD tasks
+  ci:
+    desc: Run all CI checks (test, lint, security)
+    cmds:
+      - task: test
+      - task: lint
+      - task: security
+      - task: coverage:check
+
+  ci:quick:
+    desc: Run quick CI checks (without slow tests)
+    cmds:
+      - go test -short ./...
+      - task: lint:golangci
+      - task: lint:vet
+
+  # Release tasks
+  release:
+    desc: Create a new release (requires VERSION variable)
+    cmds:
+      - |
+        if [ -z "{{.VERSION}}" ]; then
+          echo "Error: VERSION not specified"
+          echo "Usage: task release VERSION=v1.0.0"
+          exit 1
+        fi
+        echo "Creating release {{.VERSION}}..."
+        git tag {{.VERSION}}
+        git push origin {{.VERSION}}
+
+  # Module tasks
+  mod:
+    desc: Update go modules
+    cmds:
+      - go get -u ./...
+      - go mod tidy
+
+  mod:check:
+    desc: Verify module dependencies
+    cmds:
+      - go mod verify
+
+  mod:graph:
+    desc: Show module dependency graph
+    cmds:
+      - go mod graph
+
+  # Example tasks
+  example:
+    desc: Run example programs
+    cmds:
+      - go run examples/simple.go
+
+  # Phase-specific tasks (for tracking implementation progress)
+  phase0:
+    desc: Phase 0 - Setup completed
+    cmds:
+      - 'echo "✅ Phase 0: Setup and Infrastructure"'
+      - echo "   - Directory structure created"
+      - echo "   - GitHub Actions configured"
+      - echo "   - Documentation initialized"
+
+  status:
+    desc: Show project status
+    cmds:
+      - echo "GoSonata Project Status"
+      - echo "======================="
+      - go version
+      - echo ""
+      - echo "Test Coverage:"
+      - task: coverage:report --silent | tail -1
+      - echo ""
+      - echo "TODOs:"
+      - grep -r "TODO:" pkg/ internal/ --include="*.go" | wc -l | xargs echo "  Remaining TODOs:"

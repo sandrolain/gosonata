@@ -1,0 +1,75 @@
+# .gitignore for GoSonata
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+coverage.xml
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+bin/
+dist/
+build/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Log files
+*.log
+
+# Security scan results
+gosec-report.json
+trivy-results.sarif
+
+# Benchmark results
+benchmark.txt
+*.bench
+
+# Air (live reload) temporary files
+tmp/
+
+# Go module download cache
+go.sum.backup
+
+# Test cache
+.cache/
+
+# Documentation build
+docs/api.txt
+
+# Nodejs
+node_modules/
+
+# Thirdy
+/thirdy
+
+# Agent
+.agents
+/spec
+/.github/copilot-instructions.md
