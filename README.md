@@ -139,27 +139,6 @@ For more examples, see the [examples/](examples/) directory.
 
 - [API Documentation](https://godoc.org/github.com/sandrolain/gosonata) - Complete GoDoc reference
 - [JSONata Documentation](https://jsonata.org/) - Official JSONata language documentation
-- [Implementation Plan](spec/implementation-plan.md) - Detailed development roadmap
-- [Architecture Analysis](spec/implementations-analysis.md) - Comparative analysis of implementations
-
-## Development Status
-
-### Roadmap
-
-| Phase | Status | Description |
-|-------|--------|-------------|
-| Phase 0 | ✅ Complete | Setup and Infrastructure |
-| Phase 1 | 🚧 Next | Lexer and Tokenizer |
-| Phase 2-3 | ⏳ Planned | Parser Implementation |
-| Phase 4 | ⏳ Planned | Evaluator Implementation |
-| Phase 5 | ⏳ Planned | Built-in Functions (66 functions) |
-| Phase 6 | ⏳ Planned | Advanced Features |
-| Phase 7 | ⏳ Planned | Performance Optimization |
-| Phase 8 | ⏳ Planned | Production Ready (v1.0.0) |
-
-### Current Version: v0.1.0-dev
-
-**Timeline**: Estimated 3-4 months to v1.0.0
 
 ## Testing
 
@@ -200,51 +179,6 @@ task bench:evaluator
 - Evaluation: 10x faster
 - Memory: 50% less allocation
 
-## Contributing
-
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-### Development Setup
-
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/sandrolain/gosonata.git
-   cd gosonata
-   ```
-
-2. Install dependencies:
-
-   ```bash
-   task install
-   ```
-
-3. Run tests:
-
-   ```bash
-   task test
-   ```
-
-4. Run linters:
-
-   ```bash
-   task lint
-   ```
-
-### Development Tasks
-
-We use [Task](https://taskfile.dev) for development automation:
-
-```bash
-task               # Show all available tasks
-task dev           # Development mode with watcher
-task test          # Run all tests
-task lint          # Run all linters
-task coverage      # Generate coverage report
-task bench         # Run benchmarks
-task ci            # Run all CI checks
-```
-
 ## Security
 
 Security is a priority. GoSonata includes:
@@ -281,7 +215,6 @@ task security
 ## Support
 
 - 📖 [Documentation](https://godoc.org/github.com/sandrolain/gosonata)
-- 💬 [Discussions](https://github.com/sandrolain/gosonata/discussions)
 - 🐛 [Issue Tracker](https://github.com/sandrolain/gosonata/issues)
 
 ---
