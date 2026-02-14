@@ -170,8 +170,8 @@ func (p *Parser) parsePrefix() (*types.ASTNode, error) {
 	case TokenNull:
 		return p.parseNull()
 	case TokenName, TokenNameEsc:
-		// Check if it's a lambda (function keyword)
-		if token.Value == "function" {
+		// Check if it's a lambda (function keyword or λ character)
+		if token.Value == "function" || token.Value == "λ" {
 			return p.parseLambda()
 		}
 		return p.parseName()
