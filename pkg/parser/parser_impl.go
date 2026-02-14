@@ -467,6 +467,12 @@ func (p *Parser) parsePath(left *types.ASTNode) (*types.ASTNode, error) {
 	node.LHS = left
 	node.RHS = right
 
+	// Propagate KeepArray flag from left side (e.g., from $[] syntax)
+	//This ensures array structure is preserved through path chains
+	if left.KeepArray {
+		node.KeepArray = true
+	}
+
 	return node, nil
 }
 
@@ -481,7 +487,8 @@ func (p *Parser) parseFilter(left *types.ASTNode) (*types.ASTNode, error) {
 		// Empty filter means "return all items" - use NodeFilter with nil RHS
 		node := types.NewASTNode(types.NodeFilter, pos)
 		node.LHS = left
-		node.RHS = nil // nil filter means "return all"
+		node.RHS = nil        // nil filter means "return all"
+		node.KeepArray = true // Preserve array structure through path evaluation
 		return node, nil
 	}
 

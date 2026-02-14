@@ -187,6 +187,10 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 		return nil, nil
 	}
 
+	// Check if we should keep singleton arrays
+	// This traverses the LHS chain to find any KeepArray flags
+	keepArray := node.KeepArray || hasKeepArrayInChain(node.LHS)
+
 	// Special case: if RHS is a prefix object constructor (expr.{...}),
 	// do grouping evaluation instead of simple array map
 	if node.RHS.Type == types.NodeObject && node.RHS.LHS == nil {
@@ -248,6 +252,13 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 			return nil, nil
 		}
 
+		// If keepArray is false and we have a singleton, unwrap it
+		// This implements the JSONata behavior where singleton arrays are flattened
+		// unless explicitly marked to keep (e.g., with [] syntax)
+		if len(result) == 1 && !keepArray {
+			return result[0], nil
+		}
+
 		return result, nil
 	}
 
@@ -263,6 +274,22 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 
 	// Evaluate right side in new context
 	return e.evalNode(ctx, node.RHS, pathCtx)
+}
+
+// hasKeepArrayInChain recursively checks if any node in the LHS chain has KeepArray set.
+// This helper traverses the node tree to find [] syntax anywhere in the path chain.
+func hasKeepArrayInChain(node *types.ASTNode) bool {
+	if node == nil {
+		return false
+	}
+	if node.KeepArray {
+		return true
+	}
+	// Recursively check LHS chain (for nested paths and filters)
+	if node.LHS != nil && hasKeepArrayInChain(node.LHS) {
+		return true
+	}
+	return false
 }
 
 // evalBinary evaluates a binary operator expression.
@@ -859,6 +886,7 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 		if len(arr) == 0 {
 			return nil, nil
 		}
+		// Always return as array when using [] syntax (node.KeepArray is set by parser)
 		return arr, nil
 	}
 

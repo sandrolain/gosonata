@@ -102,11 +102,35 @@ func (e *Evaluator) Eval(ctx context.Context, expr *types.Expression, data inter
 	}
 
 	// Singleton array unwrapping: JSONata unwraps singleton arrays at the top level
+	// UNLESS the expression has KeepArray flag set (e.g., using [] syntax)
 	if arr, ok := result.([]interface{}); ok && len(arr) == 1 {
-		return arr[0], nil
+		// Check if we should keep the array structure
+		keepArray := expr.AST().KeepArray || hasKeepArrayInASTChain(expr.AST())
+		if !keepArray {
+			return arr[0], nil
+		}
 	}
 
 	return result, nil
+}
+
+// hasKeepArrayInASTChain checks if any node in the AST chain has KeepArray set.
+func hasKeepArrayInASTChain(node *types.ASTNode) bool {
+	if node == nil {
+		return false
+	}
+	if node.KeepArray {
+		return true
+	}
+	// Recursively check LHS chain
+	if node.LHS != nil && hasKeepArrayInASTChain(node.LHS) {
+		return true
+	}
+	// Also check RHS chain (for completeness)
+	if node.RHS != nil && hasKeepArrayInASTChain(node.RHS) {
+		return true
+	}
+	return false
 }
 
 // EvalWithBindings evaluates an expression with custom variable bindings.
