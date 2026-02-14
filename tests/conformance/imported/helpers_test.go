@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 )
 
 // compareResults compares two results (simplified version).
@@ -30,6 +31,39 @@ func compareResults(got, expected interface{}) bool {
 	}
 
 	return reflect.DeepEqual(gotVal, expVal)
+}
+
+// compareResultsUnordered compares two results, treating arrays as unordered sets.
+func compareResultsUnordered(got, expected interface{}) bool {
+	// If both are arrays, sort them and compare
+	if gotArr, ok := got.([]interface{}); ok {
+		if expArr, ok := expected.([]interface{}); ok {
+			if len(gotArr) != len(expArr) {
+				return false
+			}
+			// Convert to strings for sorting and comparison
+			gotStrs := make([]string, len(gotArr))
+			expStrs := make([]string, len(expArr))
+			for i, v := range gotArr {
+				b, _ := json.Marshal(v)
+				gotStrs[i] = string(b)
+			}
+			for i, v := range expArr {
+				b, _ := json.Marshal(v)
+				expStrs[i] = string(b)
+			}
+			sort.Strings(gotStrs)
+			sort.Strings(expStrs)
+			for i := 0; i < len(gotStrs); i++ {
+				if gotStrs[i] != expStrs[i] {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	// Otherwise use regular comparison
+	return compareResults(got, expected)
 }
 
 // formatResultForTest returns a formatted JSON string for test output.
