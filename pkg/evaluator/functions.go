@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sandrolain/gosonata/pkg/types"
 )
@@ -111,15 +114,32 @@ func initBuiltinFunctions() {
 			"not":     {Name: "not", MinArgs: 1, MaxArgs: 1, Impl: fnNot},
 
 			// Math functions
-			"abs":   {Name: "abs", MinArgs: 1, MaxArgs: 1, Impl: fnAbs},
-			"floor": {Name: "floor", MinArgs: 1, MaxArgs: 1, Impl: fnFloor},
-			"ceil":  {Name: "ceil", MinArgs: 1, MaxArgs: 1, Impl: fnCeil},
-			"round": {Name: "round", MinArgs: 1, MaxArgs: 2, Impl: fnRound},
-			"sqrt":  {Name: "sqrt", MinArgs: 1, MaxArgs: 1, Impl: fnSqrt},
-			"power": {Name: "power", MinArgs: 2, MaxArgs: 2, Impl: fnPower},
+			"abs":    {Name: "abs", MinArgs: 1, MaxArgs: 1, Impl: fnAbs},
+			"floor":  {Name: "floor", MinArgs: 1, MaxArgs: 1, Impl: fnFloor},
+			"ceil":   {Name: "ceil", MinArgs: 1, MaxArgs: 1, Impl: fnCeil},
+			"round":  {Name: "round", MinArgs: 1, MaxArgs: 2, Impl: fnRound},
+			"sqrt":   {Name: "sqrt", MinArgs: 1, MaxArgs: 1, Impl: fnSqrt},
+			"power":  {Name: "power", MinArgs: 2, MaxArgs: 2, Impl: fnPower},
+			"random": {Name: "random", MinArgs: 0, MaxArgs: 0, Impl: fnRandom},
 
 			// Object functions
-			"each": {Name: "each", MinArgs: 2, MaxArgs: 2, Impl: fnEach},
+			"each":   {Name: "each", MinArgs: 2, MaxArgs: 2, Impl: fnEach},
+			"keys":   {Name: "keys", MinArgs: 1, MaxArgs: 1, Impl: fnKeys},
+			"lookup": {Name: "lookup", MinArgs: 2, MaxArgs: 2, Impl: fnLookup},
+			"merge":  {Name: "merge", MinArgs: 1, MaxArgs: 1, Impl: fnMerge},
+			"spread": {Name: "spread", MinArgs: 1, MaxArgs: 1, Impl: fnSpread},
+			"error":  {Name: "error", MinArgs: 0, MaxArgs: 1, Impl: fnError},
+			"assert": {Name: "assert", MinArgs: 1, MaxArgs: 2, Impl: fnAssert},
+
+			// Regex functions
+			"match":   {Name: "match", MinArgs: 2, MaxArgs: 3, Impl: fnMatch},
+			"replace": {Name: "replace", MinArgs: 3, MaxArgs: 4, Impl: fnReplace},
+
+			// Date/Time functions
+			"now":        {Name: "now", MinArgs: 0, MaxArgs: 2, Impl: fnNow},
+			"millis":     {Name: "millis", MinArgs: 0, MaxArgs: 0, Impl: fnMillis},
+			"fromMillis": {Name: "fromMillis", MinArgs: 1, MaxArgs: 3, Impl: fnFromMillis},
+			"toMillis":   {Name: "toMillis", MinArgs: 1, MaxArgs: 2, Impl: fnToMillis},
 		}
 	})
 }
@@ -891,4 +911,475 @@ func fnEach(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inte
 	}
 
 	return result, nil
+}
+
+// --- Math Functions (Extended) ---
+
+// fnRandom returns a pseudo-random number between 0 (inclusive) and 1 (exclusive).
+func fnRandom(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	return rand.Float64(), nil
+}
+
+// --- Object Functions ---
+
+// fnKeys returns an array of keys from an object or array of objects.
+// For arrays, returns a de-duplicated list of all keys from all items.
+func fnKeys(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if len(args) == 0 {
+		return []interface{}{}, nil
+	}
+
+	arg := args[0]
+	result := make([]interface{}, 0)
+
+	switch v := arg.(type) {
+	case []interface{}:
+		// Merge the keys of all items in the array, preserving order of first appearance
+		seen := make(map[string]bool)
+		var keys []string
+		for _, item := range v {
+			if allkeys, err := fnKeys(ctx, e, evalCtx, []interface{}{item}); err != nil {
+				return nil, err
+			} else if allkeys != nil {
+				if arr, ok := allkeys.([]interface{}); ok {
+					for _, key := range arr {
+						if keyStr, ok := key.(string); ok {
+							if !seen[keyStr] {
+								seen[keyStr] = true
+								keys = append(keys, keyStr)
+							}
+						}
+					}
+				}
+			}
+		}
+		for _, key := range keys {
+			result = append(result, key)
+		}
+	case *OrderedObject:
+		for _, k := range v.Keys {
+			result = append(result, k)
+		}
+	case map[string]interface{}:
+		for key := range v {
+			result = append(result, key)
+		}
+	}
+
+	if len(result) == 0 {
+		return nil, nil
+	}
+	return result, nil
+}
+
+// fnLookup returns the value associated with a key in an object.
+// If the object is an array of objects, searches all and returns all matching values.
+func fnLookup(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	keyStr, ok := args[1].(string)
+	if !ok {
+		keyStr = fmt.Sprint(args[1])
+	}
+
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	// Handle single object
+	if orderedObj, ok := args[0].(*OrderedObject); ok {
+		if val, found := orderedObj.Get(keyStr); found {
+			return val, nil
+		}
+		return nil, nil
+	}
+
+	if mapObj, ok := args[0].(map[string]interface{}); ok {
+		if val, found := mapObj[keyStr]; found {
+			return val, nil
+		}
+		return nil, nil
+	}
+
+	// Handle array of objects
+	if arr, ok := args[0].([]interface{}); ok {
+		results := make([]interface{}, 0)
+		for _, item := range arr {
+			if orderedObj, ok := item.(*OrderedObject); ok {
+				if val, found := orderedObj.Get(keyStr); found {
+					results = append(results, val)
+				}
+			} else if mapObj, ok := item.(map[string]interface{}); ok {
+				if val, found := mapObj[keyStr]; found {
+					results = append(results, val)
+				}
+			}
+		}
+		if len(results) == 0 {
+			return nil, nil
+		}
+		if len(results) == 1 {
+			return results[0], nil
+		}
+		return results, nil
+	}
+
+	return nil, nil
+}
+
+// fnMerge merges an array of objects into a single object.
+func fnMerge(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	arr, err := e.toArray(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	result := &OrderedObject{
+		Keys:   make([]string, 0),
+		Values: make(map[string]interface{}),
+	}
+
+	for _, item := range arr {
+		if orderedObj, ok := item.(*OrderedObject); ok {
+			for _, k := range orderedObj.Keys {
+				if _, exists := result.Values[k]; !exists {
+					result.Keys = append(result.Keys, k)
+				}
+				result.Values[k] = orderedObj.Values[k]
+			}
+		} else if mapObj, ok := item.(map[string]interface{}); ok {
+			for k, v := range mapObj {
+				if _, exists := result.Values[k]; !exists {
+					result.Keys = append(result.Keys, k)
+				}
+				result.Values[k] = v
+			}
+		} else {
+			return nil, fmt.Errorf("cannot merge non-object item")
+		}
+	}
+
+	return result, nil
+}
+
+// fnSpread splits object/array into array of single key/value pair objects.
+// For non-array non-object values (including lambdas), returns the value as-is.
+func fnSpread(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if len(args) == 0 || args[0] == nil {
+		return nil, nil
+	}
+
+	return fnSpreadRecursive(ctx, e, evalCtx, args[0])
+}
+
+// fnSpreadRecursive is the recursive implementation of spread
+func fnSpreadRecursive(ctx context.Context, e *Evaluator, evalCtx *EvalContext, arg interface{}) (interface{}, error) {
+	result := make([]interface{}, 0)
+
+	switch v := arg.(type) {
+	case []interface{}:
+		// spread all items in the array
+		for _, item := range v {
+			spreadItem, err := fnSpreadRecursive(ctx, e, evalCtx, item)
+			if err != nil {
+				return nil, err
+			}
+			if arr, ok := spreadItem.([]interface{}); ok {
+				result = append(result, arr...)
+			} else if spreadItem != nil {
+				result = append(result, spreadItem)
+			}
+		}
+	case *OrderedObject:
+		// Create single-key objects for each property
+		for _, k := range v.Keys {
+			item := &OrderedObject{
+				Keys:   []string{k},
+				Values: map[string]interface{}{k: v.Values[k]},
+			}
+			result = append(result, item)
+		}
+	case map[string]interface{}:
+		// Create single-key objects for each property
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			item := &OrderedObject{
+				Keys:   []string{k},
+				Values: map[string]interface{}{k: v[k]},
+			}
+			result = append(result, item)
+		}
+	default:
+		// For non-array, non-object values (including lambdas), return as-is
+		return arg, nil
+	}
+
+	if len(result) == 0 {
+		return nil, nil
+	}
+	return result, nil
+}
+
+// fnError throws an error with optional message.
+// Signature: $error([message])
+func fnError(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	message := "$error() function evaluated"
+	if len(args) > 0 && args[0] != nil {
+		message = fmt.Sprint(args[0])
+	}
+	return nil, fmt.Errorf("D3137: %s", message)
+}
+
+// fnAssert asserts a condition, throws error if false.
+// Signature: $assert(condition [, message])
+// The condition must be a boolean; null and numbers return T0410 error
+func fnAssert(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("T0410: $assert() requires at least 1 argument")
+	}
+
+	// Validate that first argument is a boolean
+	// null and numbers are not valid conditions
+	if args[0] != nil {
+		if _, ok := args[0].(bool); !ok {
+			// Non-boolean values are not valid conditions
+			return nil, fmt.Errorf("T0410: $assert() requires condition to be boolean")
+		}
+	} else {
+		// null is not a valid condition
+		return nil, fmt.Errorf("T0410: $assert() requires condition to be boolean")
+	}
+
+	// At this point, args[0] is a boolean
+	condition := args[0].(bool)
+
+	// Extract message
+	message := "$assert() statement failed"
+	if len(args) > 1 && args[1] != nil {
+		message = fmt.Sprint(args[1])
+	}
+
+	if !condition {
+		return nil, fmt.Errorf("D3141: %s", message)
+	}
+	return nil, nil
+}
+
+// --- Regex Functions ---
+
+// fnMatch finds regex matches and returns array of match objects.
+// Signature: $match(str, pattern [, limit])
+func fnMatch(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	str, ok := args[0].(string)
+	if !ok {
+		str = fmt.Sprint(args[0])
+	}
+
+	// Get pattern (string or regex)
+	var regexPattern *regexp.Regexp
+	var err error
+
+	switch pattern := args[1].(type) {
+	case string:
+		regexPattern, err = regexp.Compile(regexp.QuoteMeta(pattern))
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex pattern: %w", err)
+		}
+	case *regexp.Regexp:
+		regexPattern = pattern
+	default:
+		return nil, fmt.Errorf("pattern must be string or regex")
+	}
+
+	// Get limit if provided
+	limit := -1
+	if len(args) > 2 && args[2] != nil {
+		limitNum, err := e.toNumber(args[2])
+		if err != nil {
+			return nil, err
+		}
+		limit = int(limitNum)
+	}
+
+	// Find all matches
+	matches := regexPattern.FindAllStringSubmatchIndex(str, limit)
+	if matches == nil {
+		return []interface{}{}, nil
+	}
+
+	result := make([]interface{}, len(matches))
+	for i, match := range matches {
+		// match[0:2] is the full match start:end
+		// match[2:] are capture groups
+		matchStr := str[match[0]:match[1]]
+		groups := make([]interface{}, 0)
+
+		// Add capture groups
+		for j := 1; j < len(match)/2; j++ {
+			start := match[2*j]
+			end := match[2*j+1]
+			if start >= 0 && end >= 0 {
+				groups = append(groups, str[start:end])
+			} else {
+				groups = append(groups, nil)
+			}
+		}
+
+		matchObj := &OrderedObject{
+			Keys: []string{"match", "index", "groups"},
+			Values: map[string]interface{}{
+				"match":  matchStr,
+				"index":  float64(match[0]),
+				"groups": groups,
+			},
+		}
+		result[i] = matchObj
+	}
+
+	return result, nil
+}
+
+// fnReplace finds and replaces using regex or string pattern.
+// Signature: $replace(str, pattern, replacement [, limit])
+func fnReplace(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	str, ok := args[0].(string)
+	if !ok {
+		str = fmt.Sprint(args[0])
+	}
+
+	replacement := fmt.Sprint(args[2])
+
+	// Get limit if provided
+	limit := -1
+	if len(args) > 3 && args[3] != nil {
+		limitNum, err := e.toNumber(args[3])
+		if err != nil {
+			return nil, err
+		}
+		limit = int(limitNum)
+	}
+
+	// Get pattern (string or regex)
+	var result string
+	switch pattern := args[1].(type) {
+	case string:
+		// Simple string replacement
+		if limit < 0 {
+			result = strings.ReplaceAll(str, pattern, replacement)
+		} else {
+			result = strings.Replace(str, pattern, replacement, limit)
+		}
+
+	case *regexp.Regexp:
+		// Regex replacement
+		if limit < 0 {
+			result = pattern.ReplaceAllString(str, replacement)
+		} else {
+			// Replace only first 'limit' occurrences
+			matches := pattern.FindAllStringIndex(str, limit)
+			if len(matches) == 0 {
+				result = str
+			} else {
+				var buf bytes.Buffer
+				lastEnd := 0
+				for _, match := range matches {
+					buf.WriteString(str[lastEnd:match[0]])
+					buf.WriteString(replacement)
+					lastEnd = match[1]
+				}
+				buf.WriteString(str[lastEnd:])
+				result = buf.String()
+			}
+		}
+
+	default:
+		return nil, fmt.Errorf("pattern must be string or regex")
+	}
+
+	return result, nil
+}
+
+// --- Date/Time Functions ---
+
+var nowTime time.Time
+var nowCalculated bool
+
+// fnNow returns current timestamp in ISO 8601 format.
+// Signature: $now([picture [, timezone]])
+func fnNow(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	// Cache the current time for all evaluations in this context
+	if !nowCalculated {
+		nowTime = time.Now()
+		nowCalculated = true
+	}
+
+	// Simple ISO 8601 format if no picture provided
+	if len(args) == 0 {
+		return nowTime.UTC().Format(time.RFC3339Nano), nil
+	}
+
+	// Note: Full XPath datetime formatting is complex and not implemented
+	// Return simple ISO format for now
+	return nowTime.UTC().Format(time.RFC3339Nano), nil
+}
+
+// fnMillis returns milliseconds since Unix epoch.
+func fnMillis(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	// Use same time as $now for consistency
+	if !nowCalculated {
+		nowTime = time.Now()
+		nowCalculated = true
+	}
+	return float64(nowTime.UnixMilli()), nil
+}
+
+// fnFromMillis converts milliseconds since epoch to ISO 8601 string.
+// Signature: $fromMillis(number [, picture [, timezone]])
+func fnFromMillis(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	millis, err := e.toNumber(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	timestamp := time.Unix(0, int64(millis)*1000000).UTC()
+
+	// Simple ISO 8601 format if no picture provided
+	if len(args) < 2 {
+		return timestamp.Format(time.RFC3339Nano), nil
+	}
+
+	// Note: Full XPath datetime formatting is complex and not implemented
+	// Return simple ISO format for now
+	return timestamp.Format(time.RFC3339Nano), nil
+}
+
+// fnToMillis converts ISO 8601 timestamp to milliseconds since epoch.
+// Signature: $toMillis(timestamp [, picture])
+func fnToMillis(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	timestamp, ok := args[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("timestamp must be a string")
+	}
+
+	// Try parsing ISO 8601 format
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05Z07:00",
+		"2006-01-02T15:04:05",
+		"2006-01-02",
+	}
+
+	var t time.Time
+	var err error
+	for _, layout := range layouts {
+		t, err = time.Parse(layout, timestamp)
+		if err == nil {
+			return float64(t.UnixMilli()), nil
+		}
+	}
+
+	return nil, fmt.Errorf("cannot parse timestamp: %s", timestamp)
 }
