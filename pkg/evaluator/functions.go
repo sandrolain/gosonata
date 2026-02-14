@@ -117,6 +117,9 @@ func initBuiltinFunctions() {
 			"round": {Name: "round", MinArgs: 1, MaxArgs: 2, Impl: fnRound},
 			"sqrt":  {Name: "sqrt", MinArgs: 1, MaxArgs: 1, Impl: fnSqrt},
 			"power": {Name: "power", MinArgs: 2, MaxArgs: 2, Impl: fnPower},
+
+			// Object functions
+			"each": {Name: "each", MinArgs: 2, MaxArgs: 2, Impl: fnEach},
 		}
 	})
 }
@@ -833,4 +836,59 @@ func fnPower(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []int
 	}
 
 	return math.Pow(base, exponent), nil
+}
+
+// --- Object Functions ---
+
+// fnEach returns an array containing the results of calling a function on each key-value pair of an object.
+// Signature: $each(object, function)
+// The function is invoked with two arguments: the property value and the property name.
+// Returns results in key order.
+func fnEach(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	obj := args[0]
+	if obj == nil {
+		return []interface{}{}, nil
+	}
+
+	lambda, ok := args[1].(*Lambda)
+	if !ok {
+		return nil, fmt.Errorf("second argument to $each must be a function")
+	}
+
+	// Validate lambda has exactly 2 parameters (value, key)
+	if len(lambda.Params) != 2 {
+		return nil, fmt.Errorf("$each requires a function with 2 parameters (value, key), got %d", len(lambda.Params))
+	}
+
+	var keys []string
+	var values map[string]interface{}
+
+	// Handle OrderedObject to preserve key order
+	if orderedObj, ok := obj.(*OrderedObject); ok {
+		keys = orderedObj.Keys
+		values = orderedObj.Values
+	} else if mapObj, ok := obj.(map[string]interface{}); ok {
+		// For regular maps, sort keys for consistent ordering
+		keys = make([]string, 0, len(mapObj))
+		for k := range mapObj {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		values = mapObj
+	} else {
+		return nil, fmt.Errorf("first argument to $each must be an object")
+	}
+
+	result := make([]interface{}, 0, len(keys))
+	for _, key := range keys {
+		value := values[key]
+		// Call lambda with (value, key)
+		lambdaResult, err := e.callLambda(ctx, lambda, []interface{}{value, key})
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, lambdaResult)
+	}
+
+	return result, nil
 }
