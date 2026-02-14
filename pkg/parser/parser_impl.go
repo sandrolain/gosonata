@@ -73,7 +73,6 @@ var precedence = map[TokenType]int{
 	TokenRange:        45, // ..
 	TokenApply:        20, // ~>
 	TokenAssign:       10, // :=
-	TokenSemicolon:    5,  // ;
 	TokenPlus:         50, // +
 	TokenMinus:        50, // -
 	TokenMult:         60, // *
@@ -221,8 +220,6 @@ func (p *Parser) parseInfix(left *types.ASTNode) (*types.ASTNode, error) {
 		return p.parseApply(left)
 	case TokenAssign:
 		return p.parseAssignment(left)
-	case TokenSemicolon:
-		return p.parseSequencing(left)
 	case TokenPlus, TokenMinus, TokenMult, TokenDiv, TokenMod,
 		TokenEqual, TokenNotEqual, TokenLess, TokenLessEqual,
 		TokenGreater, TokenGreaterEqual, TokenConcat,
@@ -316,8 +313,11 @@ func (p *Parser) parseUnaryMinus() (*types.ASTNode, error) {
 	return node, nil
 }
 
-// parseGrouping parses a parenthesized expression.
+// parseGrouping parses a parenthesized expression or block.
+// A block is one or more expressions separated by semicolons.
+// Each block creates a new lexical scope for variable bindings.
 func (p *Parser) parseGrouping() (*types.ASTNode, error) {
+	startPos := p.current.Position
 	p.advance() // Skip '('
 
 	if p.current.Type == TokenParenClose {
@@ -328,16 +328,32 @@ func (p *Parser) parseGrouping() (*types.ASTNode, error) {
 		return node, nil
 	}
 
-	expr, err := p.parseExpression(0)
-	if err != nil {
-		return nil, err
+	var exprs []*types.ASTNode
+
+	// Parse expressions separated by semicolons
+	for p.current.Type != TokenParenClose {
+		expr, err := p.parseExpression(0)
+		if err != nil {
+			return nil, err
+		}
+		exprs = append(exprs, expr)
+
+		// If no semicolon, we're done with the sequence
+		if p.current.Type != TokenSemicolon {
+			break
+		}
+		p.advance() // Skip ';'
 	}
 
 	if err := p.expect(TokenParenClose); err != nil {
 		return nil, err
 	}
 
-	return expr, nil
+	// Always wrap in a block node to establish a lexical scope
+	blockNode := types.NewASTNode(types.NodeBlock, startPos)
+	blockNode.Expressions = exprs
+
+	return blockNode, nil
 }
 
 // parseArrayConstructor parses an array constructor [...].
@@ -675,6 +691,7 @@ func (p *Parser) parseApply(left *types.ASTNode) (*types.ASTNode, error) {
 
 // parseAssignment parses an assignment expression.
 // Syntax: $var := value
+// Right-associative: $a := $b := 5 is ($a := ($b := 5))
 func (p *Parser) parseAssignment(left *types.ASTNode) (*types.ASTNode, error) {
 	if left.Type != types.NodeVariable {
 		return nil, p.error("S0201", "Left-hand side of assignment must be a variable")
@@ -684,8 +701,9 @@ func (p *Parser) parseAssignment(left *types.ASTNode) (*types.ASTNode, error) {
 	prec := p.getPrecedence(TokenAssign)
 	p.advance() // Skip ':='
 
-	// Parse right-hand side
-	right, err := p.parseExpression(prec)
+	// Parse right-hand side with lower precedence to allow right-associativity
+	// Using prec-1 allows chained assignments like $a := $b := 5
+	right, err := p.parseExpression(prec - 1)
 	if err != nil {
 		return nil, err
 	}
@@ -695,43 +713,6 @@ func (p *Parser) parseAssignment(left *types.ASTNode) (*types.ASTNode, error) {
 	node.LHS = left         // Variable node
 	node.RHS = right        // Value expression
 
-	return node, nil
-}
-
-// parseSequencing parses a sequencing expression (comma-separated statements).
-// Syntax: expr ; expr ; ...
-func (p *Parser) parseSequencing(left *types.ASTNode) (*types.ASTNode, error) {
-	pos := p.current.Position
-	prec := p.getPrecedence(TokenSemicolon)
-	p.advance() // Skip ';'
-
-	// Parse right-hand side
-	right, err := p.parseExpression(prec)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create a sequence (block) node
-	node := types.NewASTNode(types.NodeBlock, pos)
-
-	// Collect all expressions in the sequence
-	var expressions []*types.ASTNode
-
-	// If left is already a block, extend it; otherwise create new
-	if left.Type == types.NodeBlock && left.Expressions != nil {
-		expressions = append(expressions, left.Expressions...)
-	} else {
-		expressions = append(expressions, left)
-	}
-
-	// Add right expression(s)
-	if right.Type == types.NodeBlock && right.Expressions != nil {
-		expressions = append(expressions, right.Expressions...)
-	} else {
-		expressions = append(expressions, right)
-	}
-
-	node.Expressions = expressions
 	return node, nil
 }
 

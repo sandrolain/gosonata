@@ -1030,9 +1030,19 @@ func (e *Evaluator) evalBind(ctx context.Context, node *types.ASTNode, evalCtx *
 
 // evalBlock evaluates a sequence of expressions (using semicolon operator).
 // The result is the result of the last expression in the sequence.
+// Each block creates a new scope for variable bindings.
 func (e *Evaluator) evalBlock(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
 	if len(node.Expressions) == 0 {
 		return nil, nil
+	}
+
+	// Create a child context for the block scope
+	// This ensures variable bindings are local to this block
+	blockCtx := &EvalContext{
+		data:     evalCtx.Data(),
+		parent:   evalCtx,
+		bindings: make(map[string]interface{}),
+		depth:    evalCtx.Depth() + 1,
 	}
 
 	var result interface{}
@@ -1047,7 +1057,7 @@ func (e *Evaluator) evalBlock(ctx context.Context, node *types.ASTNode, evalCtx 
 		default:
 		}
 
-		result, err = e.evalNode(ctx, expr, evalCtx)
+		result, err = e.evalNode(ctx, expr, blockCtx)
 		if err != nil {
 			return nil, err
 		}
