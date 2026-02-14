@@ -6,6 +6,12 @@ type NodeType string
 // Null represents a JSONata null literal distinct from undefined (nil).
 type Null struct{}
 
+// MarshalJSON implements json.Marshaler for Null.
+// This ensures that Null serializes to JSON null instead of {}.
+func (Null) MarshalJSON() ([]byte, error) {
+	return []byte("null"), nil
+}
+
 // NullValue is the singleton value used for JSONata null.
 var NullValue = Null{}
 

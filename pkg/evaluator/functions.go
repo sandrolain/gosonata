@@ -693,6 +693,12 @@ func fnJoin(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inte
 func fnType(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
 	value := args[0]
 
+	// Check for JSONata null (types.Null) first
+	if _, ok := value.(types.Null); ok {
+		return "null", nil
+	}
+
+	// undefined (nil) also returns "null" per JSONata spec
 	if value == nil {
 		return "null", nil
 	}
@@ -707,6 +713,8 @@ func fnType(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inte
 	case []interface{}:
 		return "array", nil
 	case map[string]interface{}:
+		return "object", nil
+	case *OrderedObject:
 		return "object", nil
 	case *Lambda:
 		return "function", nil
