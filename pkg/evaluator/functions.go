@@ -1027,6 +1027,11 @@ func fnLookup(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 
 // fnMerge merges an array of objects into a single object.
 func fnMerge(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	// undefined inputs return undefined
+	if args[0] == nil {
+		return nil, nil
+	}
+
 	arr, err := e.toArray(args[0])
 	if err != nil {
 		return nil, err
@@ -1336,6 +1341,11 @@ func fnMillis(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 // fnFromMillis converts milliseconds since epoch to ISO 8601 string.
 // Signature: $fromMillis(number [, picture [, timezone]])
 func fnFromMillis(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	// undefined inputs return undefined
+	if args[0] == nil {
+		return nil, nil
+	}
+
 	millis, err := e.toNumber(args[0])
 	if err != nil {
 		return nil, err
