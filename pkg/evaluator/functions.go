@@ -176,6 +176,10 @@ func GetFunction(name string) (*FunctionDef, bool) {
 // --- Aggregation Functions ---
 
 func fnSum(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
 	arr, err := e.toArray(args[0])
 	if err != nil {
 		return nil, err
@@ -419,6 +423,11 @@ func fnSort(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inte
 }
 
 func fnAppend(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	// If second argument is undefined, return first as-is
+	if args[1] == nil {
+		return args[0], nil
+	}
+
 	arr1, err := e.toArray(args[0])
 	if err != nil {
 		return nil, err
@@ -2172,7 +2181,8 @@ func fnSubstringBefore(ctx context.Context, e *Evaluator, evalCtx *EvalContext, 
 
 	idx := strings.Index(str, separator)
 	if idx < 0 {
-		return "", nil
+		// Separator not found, return the original string
+		return str, nil
 	}
 
 	return str[:idx], nil
@@ -2195,7 +2205,8 @@ func fnSubstringAfter(ctx context.Context, e *Evaluator, evalCtx *EvalContext, a
 
 	idx := strings.Index(str, separator)
 	if idx < 0 {
-		return "", nil
+		// Separator not found, return the original string
+		return str, nil
 	}
 
 	return str[idx+len(separator):], nil
