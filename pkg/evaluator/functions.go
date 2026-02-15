@@ -3,10 +3,12 @@ package evaluator
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -146,6 +148,20 @@ func initBuiltinFunctions() {
 			"millis":     {Name: "millis", MinArgs: 0, MaxArgs: 0, Impl: fnMillis},
 			"fromMillis": {Name: "fromMillis", MinArgs: 1, MaxArgs: 3, Impl: fnFromMillis},
 			"toMillis":   {Name: "toMillis", MinArgs: 1, MaxArgs: 2, Impl: fnToMillis},
+
+			// Encoding functions
+			"base64encode":       {Name: "base64encode", MinArgs: 1, MaxArgs: 1, Impl: fnBase64Encode},
+			"base64decode":       {Name: "base64decode", MinArgs: 1, MaxArgs: 1, Impl: fnBase64Decode},
+			"encodeUrl":          {Name: "encodeUrl", MinArgs: 1, MaxArgs: 1, Impl: fnEncodeUrl},
+			"decodeUrl":          {Name: "decodeUrl", MinArgs: 1, MaxArgs: 1, Impl: fnDecodeUrl},
+			"encodeUrlComponent": {Name: "encodeUrlComponent", MinArgs: 1, MaxArgs: 1, Impl: fnEncodeUrlComponent},
+			"decodeUrlComponent": {Name: "decodeUrlComponent", MinArgs: 1, MaxArgs: 1, Impl: fnDecodeUrlComponent},
+
+			// Number formatting functions
+			"formatNumber":  {Name: "formatNumber", MinArgs: 1, MaxArgs: 3, Impl: fnFormatNumber},
+			"formatBase":    {Name: "formatBase", MinArgs: 1, MaxArgs: 2, Impl: fnFormatBase},
+			"formatInteger": {Name: "formatInteger", MinArgs: 1, MaxArgs: 2, Impl: fnFormatInteger},
+			"parseInteger":  {Name: "parseInteger", MinArgs: 1, MaxArgs: 2, Impl: fnParseInteger},
 		}
 	})
 }
@@ -1532,6 +1548,384 @@ func parseTimestampWithPicture(timestamp, picture string) (interface{}, error) {
 	// Create time and convert to milliseconds
 	t := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
 	return float64(t.UnixMilli()), nil
+}
+
+// --- Encoding Functions (Fase 5.3) ---
+
+// fnBase64Encode encodes a string to base64.
+// Signature: $base64encode(string)
+func fnBase64Encode(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	str := e.toString(args[0])
+	encoded := base64.StdEncoding.EncodeToString([]byte(str))
+	return encoded, nil
+}
+
+// fnBase64Decode decodes a base64 string.
+// Signature: $base64decode(string)
+func fnBase64Decode(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	str := e.toString(args[0])
+	decoded, err := base64.StdEncoding.DecodeString(str)
+	if err != nil {
+		return nil, fmt.Errorf("D3137: invalid base64 string: %w", err)
+	}
+	return string(decoded), nil
+}
+
+// fnEncodeUrl encodes a URL string.
+// Signature: $encodeUrl(string)
+// Encodes the full URL (path and query string).
+func fnEncodeUrl(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	str := e.toString(args[0])
+	// Parse and re-encode to handle special characters
+	u, err := url.Parse(str)
+	if err != nil {
+		// If parsing fails, do basic escaping
+		return url.PathEscape(str), nil
+	}
+	return u.String(), nil
+}
+
+// fnDecodeUrl decodes a URL string.
+// Signature: $decodeUrl(string)
+func fnDecodeUrl(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	str := e.toString(args[0])
+	decoded, err := url.PathUnescape(str)
+	if err != nil {
+		return nil, fmt.Errorf("D3137: invalid URL encoding: %w", err)
+	}
+	return decoded, nil
+}
+
+// fnEncodeUrlComponent encodes a URL component (query parameter value).
+// Signature: $encodeUrlComponent(string)
+func fnEncodeUrlComponent(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	str := e.toString(args[0])
+	return url.QueryEscape(str), nil
+}
+
+// fnDecodeUrlComponent decodes a URL component.
+// Signature: $decodeUrlComponent(string)
+func fnDecodeUrlComponent(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	str := e.toString(args[0])
+	decoded, err := url.QueryUnescape(str)
+	if err != nil {
+		return nil, fmt.Errorf("D3137: invalid URL component encoding: %w", err)
+	}
+	return decoded, nil
+}
+
+// --- Number Formatting Functions (Fase 5.3) ---
+
+// fnFormatNumber formats a number with optional picture string and decimal format.
+// Signature: $formatNumber(number [, picture [, options]])
+// Simplified implementation without full XPath picture string support.
+func fnFormatNumber(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	num, err := e.toNumber(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	// Check for non-finite values
+	if math.IsInf(num, 0) || math.IsNaN(num) {
+		return nil, fmt.Errorf("D3061: cannot format non-finite number")
+	}
+
+	// Default formatting
+	if len(args) == 1 {
+		return e.formatNumberForString(num), nil
+	}
+
+	// Picture string formatting (simplified)
+	picture := e.toString(args[1])
+
+	// Parse options if provided
+	decimalSep := "."
+	groupingSep := ","
+	if len(args) > 2 && args[2] != nil {
+		if opts, ok := args[2].(map[string]interface{}); ok {
+			if ds, ok := opts["decimal-separator"].(string); ok {
+				decimalSep = ds
+			}
+			if gs, ok := opts["grouping-separator"].(string); ok {
+				groupingSep = gs
+			}
+		}
+	}
+
+	// Simple picture string parsing
+	// Format: "#,###.##" style patterns
+	formatted := formatNumberWithPicture(num, picture, decimalSep, groupingSep)
+	return formatted, nil
+}
+
+// formatNumberWithPicture formats a number using a simple picture string.
+func formatNumberWithPicture(num float64, picture, decimalSep, groupingSep string) string {
+	// Extract decimal places from picture
+	decimalPlaces := 0
+	if idx := strings.IndexAny(picture, "."+decimalSep); idx >= 0 {
+		decimalPlaces = len(picture) - idx - 1
+	}
+
+	// Format with specified decimal places
+	formatStr := fmt.Sprintf("%%.%df", decimalPlaces)
+	formatted := fmt.Sprintf(formatStr, num)
+
+	// Replace decimal separator if needed
+	if decimalSep != "." {
+		formatted = strings.Replace(formatted, ".", decimalSep, 1)
+	}
+
+	// Add grouping separator for thousands
+	if groupingSep != "" && (strings.Contains(picture, ",") || strings.Contains(picture, groupingSep)) {
+		parts := strings.Split(formatted, decimalSep)
+		intPart := parts[0]
+
+		// Handle negative numbers
+		negative := false
+		if strings.HasPrefix(intPart, "-") {
+			negative = true
+			intPart = intPart[1:]
+		}
+
+		// Add grouping from right to left
+		if len(intPart) > 3 {
+			var result []rune
+			for i, c := range intPart {
+				if i > 0 && (len(intPart)-i)%3 == 0 {
+					for _, ch := range groupingSep {
+						result = append(result, ch)
+					}
+				}
+				result = append(result, c)
+			}
+			intPart = string(result)
+		}
+
+		if negative {
+			intPart = "-" + intPart
+		}
+
+		if len(parts) > 1 {
+			formatted = intPart + decimalSep + parts[1]
+		} else {
+			formatted = intPart
+		}
+	}
+
+	return formatted
+}
+
+// fnFormatBase formats a number in a different base (2-36).
+// Signature: $formatBase(number [, radix])
+func fnFormatBase(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	num, err := e.toNumber(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	// Check for non-finite values
+	if math.IsInf(num, 0) || math.IsNaN(num) {
+		return nil, fmt.Errorf("D3061: cannot format non-finite number")
+	}
+
+	// Default radix is 10
+	radix := 10
+	if len(args) > 1 && args[1] != nil {
+		radixNum, err := e.toNumber(args[1])
+		if err != nil {
+			return nil, err
+		}
+		radix = int(radixNum)
+		if radix < 2 || radix > 36 {
+			return nil, fmt.Errorf("D3100: radix must be between 2 and 36")
+		}
+	}
+
+	// Convert to integer and format in specified base
+	intNum := int64(num)
+	return strconv.FormatInt(intNum, radix), nil
+}
+
+// fnFormatInteger formats an integer with optional picture string.
+// Signature: $formatInteger(number [, picture])
+// Simplified implementation supporting basic Roman numerals and ordinals.
+func fnFormatInteger(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	num, err := e.toNumber(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	// Check for non-finite values
+	if math.IsInf(num, 0) || math.IsNaN(num) {
+		return nil, fmt.Errorf("D3061: cannot format non-finite number")
+	}
+
+	intNum := int(num)
+
+	// Default formatting
+	if len(args) == 1 {
+		return fmt.Sprintf("%d", intNum), nil
+	}
+
+	// Picture string formatting
+	picture := e.toString(args[1])
+
+	switch picture {
+	case "i": // Roman numerals lowercase
+		return strings.ToLower(toRomanNumeral(intNum)), nil
+	case "I": // Roman numerals uppercase
+		return toRomanNumeral(intNum), nil
+	case "w": // Words lowercase
+		return strings.ToLower(numberToWords(intNum)), nil
+	case "W": // Words uppercase
+		return numberToWords(intNum), nil
+	case "Ww": // Words title case
+		return strings.Title(strings.ToLower(numberToWords(intNum))), nil
+	default:
+		// Default to decimal
+		return fmt.Sprintf("%d", intNum), nil
+	}
+}
+
+// toRomanNumeral converts an integer to Roman numeral representation.
+func toRomanNumeral(num int) string {
+	if num <= 0 || num >= 4000 {
+		return fmt.Sprintf("%d", num) // Outside roman numeral range
+	}
+
+	val := []int{1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1}
+	sym := []string{"M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"}
+
+	var result strings.Builder
+	for i := 0; i < len(val); i++ {
+		for num >= val[i] {
+			result.WriteString(sym[i])
+			num -= val[i]
+		}
+	}
+
+	return result.String()
+}
+
+// numberToWords converts an integer to English words (simplified).
+func numberToWords(num int) string {
+	// Simplified implementation for common numbers
+	if num == 0 {
+		return "zero"
+	}
+
+	if num < 0 {
+		return "minus " + numberToWords(-num)
+	}
+
+	ones := []string{"", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"}
+	teens := []string{"ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"}
+	tens := []string{"", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"}
+
+	if num < 10 {
+		return ones[num]
+	}
+
+	if num < 20 {
+		return teens[num-10]
+	}
+
+	if num < 100 {
+		return tens[num/10] + hyphenIfNeeded(num%10) + ones[num%10]
+	}
+
+	if num < 1000 {
+		result := ones[num/100] + " hundred"
+		if num%100 != 0 {
+			result += " " + numberToWords(num%100)
+		}
+		return result
+	}
+
+	if num < 1000000 {
+		result := numberToWords(num/1000) + " thousand"
+		if num%1000 != 0 {
+			result += " " + numberToWords(num%1000)
+		}
+		return result
+	}
+
+	// For larger numbers, just return the decimal representation
+	return fmt.Sprintf("%d", num)
+}
+
+func hyphenIfNeeded(n int) string {
+	if n > 0 {
+		return "-"
+	}
+	return ""
+}
+
+// fnParseInteger parses a string to an integer with optional radix.
+// Signature: $parseInteger(string [, radix])
+func fnParseInteger(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	str := strings.TrimSpace(e.toString(args[0]))
+
+	// Default radix is 10
+	radix := 10
+	if len(args) > 1 && args[1] != nil {
+		radixNum, err := e.toNumber(args[1])
+		if err != nil {
+			return nil, err
+		}
+		radix = int(radixNum)
+		if radix < 2 || radix > 36 {
+			return nil, fmt.Errorf("D3100: radix must be between 2 and 36")
+		}
+	}
+
+	// Parse integer
+	num, err := strconv.ParseInt(str, radix, 64)
+	if err != nil {
+		return nil, fmt.Errorf("D3137: cannot parse '%s' as integer", str)
+	}
+
+	return float64(num), nil
 }
 
 // --- Enhanced Array Functions (Fase 5.2) ---
