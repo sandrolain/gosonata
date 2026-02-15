@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -73,6 +74,10 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 		return e.evalBind(ctx, node, evalCtx)
 	case types.NodeBlock:
 		return e.evalBlock(ctx, node, evalCtx)
+	case types.NodeSort:
+		return e.evalSort(ctx, node, evalCtx)
+	case types.NodeParent:
+		return e.evalParent(node, evalCtx)
 	default:
 		return nil, fmt.Errorf("unsupported node type: %s", node.Type)
 	}
@@ -1199,6 +1204,96 @@ func (e *Evaluator) evalApply(ctx context.Context, node *types.ASTNode, evalCtx 
 	return nil, fmt.Errorf("right side of ~> must be a function")
 }
 
+// evalSort evaluates a sort expression (^).
+// Syntax: sequence^(sort-key-expression)
+// Examples: items^($), data^(>price), results^(<count)
+func (e *Evaluator) evalSort(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	// Evaluate the sequence to sort
+	sequence, err := e.evalNode(ctx, node.LHS, evalCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert to array
+	items, err := e.toArray(sequence)
+	if err != nil {
+		return nil, fmt.Errorf("cannot sort non-array: %v", err)
+	}
+
+	if len(items) == 0 {
+		return items, nil
+	}
+
+	// Parse the sort key expression to extract sort direction and key
+	sortKeyExpr := node.RHS
+	ascending := true
+	keyExpr := sortKeyExpr
+
+	// Check for sort direction modifiers: <$ (ascending), >$ (descending)
+	if sortKeyExpr.Type == types.NodeUnary && sortKeyExpr.Value == "<" {
+		ascending = true
+		keyExpr = sortKeyExpr.LHS
+	} else if sortKeyExpr.Type == types.NodeUnary && sortKeyExpr.Value == ">" {
+		ascending = false
+		keyExpr = sortKeyExpr.LHS
+	}
+
+	// Evaluate sort keys for all items
+	type sortItem struct {
+		value interface{}
+		key   interface{}
+	}
+
+	sortItems := make([]sortItem, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			sortItems = append(sortItems, sortItem{value: item, key: nil})
+			continue
+		}
+
+		itemCtx := evalCtx.NewChildContext(item)
+		key, err := e.evalNode(ctx, keyExpr, itemCtx)
+		if err != nil {
+			return nil, err
+		}
+
+		sortItems = append(sortItems, sortItem{value: item, key: key})
+	}
+
+	// Sort using the keys
+	sort.SliceStable(sortItems, func(i, j int) bool {
+		ki := sortItems[i].key
+		kj := sortItems[j].key
+
+		// Nil values always go to the end
+		if ki == nil && kj == nil {
+			return false
+		}
+		if ki == nil {
+			return false
+		}
+		if kj == nil {
+			return true
+		}
+
+		// Compare keys
+		cmp := compareValues(ki, kj)
+		if ascending {
+			return cmp < 0
+		} else {
+			return cmp > 0
+		}
+	})
+
+	// Extract sorted values
+	result := make([]interface{}, len(sortItems))
+	for i, si := range sortItems {
+		result[i] = si.value
+	}
+
+	return result, nil
+}
+
 // callLambda calls a lambda function with the given arguments.
 func (e *Evaluator) callLambda(ctx context.Context, lambda *Lambda, args []interface{}) (interface{}, error) {
 	// Validate argument count
@@ -1711,4 +1806,92 @@ func (e *Evaluator) opIn(left, right interface{}) (interface{}, error) {
 	}
 
 	return false, nil
+}
+
+// evalParent evaluates the parent operator (%).
+// Returns the parent context's data.
+func (e *Evaluator) evalParent(node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	if evalCtx == nil || evalCtx.Parent() == nil {
+		return nil, nil // No parent context
+	}
+	return evalCtx.Parent().Data(), nil
+}
+
+// compareValues compares two values and returns:
+// -1 if left < right
+//
+//	0 if left == right
+//	1 if left > right
+//
+// This is used for sorting operations.
+func compareValues(left, right interface{}) int {
+	// Nil values are treated as equal to each other and less than non-nil
+	if left == nil && right == nil {
+		return 0
+	}
+	if left == nil {
+		return -1
+	}
+	if right == nil {
+		return 1
+	}
+
+	// Try numeric comparison
+	lNum, lIsNum := tryNumber(left)
+	rNum, rIsNum := tryNumber(right)
+	if lIsNum && rIsNum {
+		if lNum < rNum {
+			return -1
+		} else if lNum > rNum {
+			return 1
+		}
+		return 0
+	}
+
+	// Try string comparison
+	lStr, lIsStr := left.(string)
+	rStr, rIsStr := right.(string)
+	if lIsStr && rIsStr {
+		if lStr < rStr {
+			return -1
+		} else if lStr > rStr {
+			return 1
+		}
+		return 0
+	}
+
+	// Try boolean comparison (false < true)
+	lBool, lIsBool := left.(bool)
+	rBool, rIsBool := right.(bool)
+	if lIsBool && rIsBool {
+		if !lBool && rBool {
+			return -1 // false < true
+		} else if lBool && !rBool {
+			return 1 // true > false
+		}
+		return 0
+	}
+
+	// Arrays and objects are compared by identity
+	// If they're the same object, they're equal
+	// Otherwise, we use a stable sort (don't reorder)
+	return 0
+}
+
+// tryNumber attempts to convert a value to a float64.
+// Returns the number and a boolean indicating success.
+// This is a helper function used for numeric comparisons.
+func tryNumber(v interface{}) (float64, bool) {
+	switch val := v.(type) {
+	case float64:
+		return val, true
+	case int:
+		return float64(val), true
+	case string:
+		// Try to parse string as number
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			return f, true
+		}
+	}
+	return 0, false
 }

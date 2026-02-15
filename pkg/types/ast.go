@@ -56,6 +56,8 @@ const (
 	NodeFilter    NodeType = "filter"    // [...]
 	NodeContext   NodeType = "context"   // @
 	NodeIndex     NodeType = "index"     // #
+	NodeRange     NodeType = "range"     // .. (range operator)
+	NodeApply     NodeType = "apply"     // ~> (chain operator)
 )
 
 // ASTNode represents a node in the Abstract Syntax Tree.

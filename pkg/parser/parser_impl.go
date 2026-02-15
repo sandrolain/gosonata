@@ -79,6 +79,7 @@ var precedence = map[TokenType]int{
 	TokenDiv:          60, // /
 	TokenMod:          60, // %
 	TokenCondition:    15, // ?
+	TokenSort:         70, // ^ (sort operator)
 	TokenDot:          75, // .
 	TokenBracketOpen:  80, // [
 	TokenBraceOpen:    80, // {
@@ -179,6 +180,12 @@ func (p *Parser) parsePrefix() (*types.ASTNode, error) {
 		return p.parseVariable()
 	case TokenMinus:
 		return p.parseUnaryMinus()
+	case TokenLess, TokenGreater:
+		// These can be unary operators (e.g., <$ means ascending sort, >$ means descending)
+		return p.parseUnaryComparison()
+	case TokenMod:
+		// % in prefix position is the parent operator
+		return p.parseParent()
 	case TokenParenOpen:
 		return p.parseGrouping()
 	case TokenBracketOpen:
@@ -218,6 +225,8 @@ func (p *Parser) parseInfix(left *types.ASTNode) (*types.ASTNode, error) {
 		return p.parseRange(left)
 	case TokenApply:
 		return p.parseApply(left)
+	case TokenSort:
+		return p.parseSort(left)
 	case TokenAssign:
 		return p.parseAssignment(left)
 	case TokenPlus, TokenMinus, TokenMult, TokenDiv, TokenMod,
@@ -309,6 +318,42 @@ func (p *Parser) parseUnaryMinus() (*types.ASTNode, error) {
 	node := types.NewASTNode(types.NodeUnary, pos)
 	node.Value = "-"
 	node.LHS = expr
+
+	return node, nil
+}
+
+// parseUnaryComparison parses unary comparison operators (< and >) used in sort context.
+// Examples: <$ (ascending sort), >$ (descending sort)
+func (p *Parser) parseUnaryComparison() (*types.ASTNode, error) {
+	pos := p.current.Position
+	op := p.current.Value // "<" or ">"
+	p.advance()
+
+	// Parse the expression with high precedence
+	expr, err := p.parseExpression(70)
+	if err != nil {
+		return nil, err
+	}
+
+	node := types.NewASTNode(types.NodeUnary, pos)
+	node.Value = op
+	node.LHS = expr
+
+	return node, nil
+}
+
+// parseParent parses the parent operator (%).
+// Syntax: % or %.%.%... to reach different levels
+// Examples: %.field, %.%.field (grandparent), etc.
+func (p *Parser) parseParent() (*types.ASTNode, error) {
+	pos := p.current.Position
+	p.advance() // Skip '%'
+
+	node := types.NewASTNode(types.NodeParent, pos)
+	node.Value = "%"
+
+	// Count consecutive % to allow %.% for grandparent, %.%.% for great-grandparent, etc.
+	// We'll let parseInfix handle chaining: %.%. creates NodePath with NodeParent as left side
 
 	return node, nil
 }
@@ -711,6 +756,40 @@ func (p *Parser) parseApply(left *types.ASTNode) (*types.ASTNode, error) {
 	node.Value = "~>"
 	node.LHS = left
 	node.RHS = right
+
+	return node, nil
+}
+
+// parseSort parses a sort expression.
+// Syntax: expr^(sort-key)
+// Examples: Price^($), items^(>quantity), data^(<count)
+func (p *Parser) parseSort(left *types.ASTNode) (*types.ASTNode, error) {
+	pos := p.current.Position
+	p.advance() // Skip '^'
+
+	// Expect opening parenthesis
+	if p.current.Type != TokenParenOpen {
+		return nil, p.error("S0201", "Expected '(' after '^' operator")
+	}
+	p.advance() // Skip '('
+
+	// Parse the sort key expression
+	sortKey, err := p.parseExpression(0)
+	if err != nil {
+		return nil, err
+	}
+
+	// Expect closing parenthesis
+	if p.current.Type != TokenParenClose {
+		return nil, p.error("S0201", "Expected ')' in sort expression")
+	}
+	p.advance() // Skip ')'
+
+	// Create a NodeSort node with left expression and sort key
+	node := types.NewASTNode(types.NodeSort, pos)
+	node.LHS = left    // The sequence to sort
+	node.RHS = sortKey // The sort key expression
+	node.Value = "^"
 
 	return node, nil
 }
