@@ -1247,6 +1247,11 @@ func fnMatch(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []int
 // fnReplace finds and replaces using regex or string pattern.
 // Signature: $replace(str, pattern, replacement [, limit])
 func fnReplace(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	// undefined inputs return undefined
+	if args[0] == nil {
+		return nil, nil
+	}
+
 	str, ok := args[0].(string)
 	if !ok {
 		str = fmt.Sprint(args[0])
@@ -1255,19 +1260,28 @@ func fnReplace(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []i
 	replacement := fmt.Sprint(args[2])
 
 	// Get limit if provided
-	limit := -1
+	limit := -1 // -1 means unlimited
 	if len(args) > 3 && args[3] != nil {
 		limitNum, err := e.toNumber(args[3])
 		if err != nil {
 			return nil, err
 		}
 		limit = int(limitNum)
+		// Validate limit is not negative (except -1 which means unlimited)
+		if limit < 0 && limit != -1 {
+			return nil, fmt.Errorf("D3011: limit must be non-negative")
+		}
 	}
 
 	// Get pattern (string or regex)
 	var result string
 	switch pattern := args[1].(type) {
 	case string:
+		// Validate pattern is not empty
+		if pattern == "" {
+			return nil, fmt.Errorf("D3010: pattern cannot be empty")
+		}
+
 		// Simple string replacement
 		if limit < 0 {
 			result = strings.ReplaceAll(str, pattern, replacement)
@@ -1276,6 +1290,11 @@ func fnReplace(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []i
 		}
 
 	case *regexp.Regexp:
+		// Validate pattern is not empty
+		if pattern.String() == "" {
+			return nil, fmt.Errorf("D3010: pattern cannot be empty")
+		}
+
 		// Regex replacement
 		if limit < 0 {
 			result = pattern.ReplaceAllString(str, replacement)
