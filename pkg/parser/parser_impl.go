@@ -316,6 +316,7 @@ func (p *Parser) parseUnaryMinus() (*types.ASTNode, error) {
 // parseGrouping parses a parenthesized expression or block.
 // A block is one or more expressions separated by semicolons.
 // Each block creates a new lexical scope for variable bindings.
+// Single expressions without semicolons are returned directly (pure grouping).
 func (p *Parser) parseGrouping() (*types.ASTNode, error) {
 	startPos := p.current.Position
 	p.advance() // Skip '('
@@ -329,6 +330,7 @@ func (p *Parser) parseGrouping() (*types.ASTNode, error) {
 	}
 
 	var exprs []*types.ASTNode
+	hasSemicolon := false
 
 	// Parse expressions separated by semicolons
 	for p.current.Type != TokenParenClose {
@@ -342,6 +344,7 @@ func (p *Parser) parseGrouping() (*types.ASTNode, error) {
 		if p.current.Type != TokenSemicolon {
 			break
 		}
+		hasSemicolon = true
 		p.advance() // Skip ';'
 	}
 
@@ -349,7 +352,13 @@ func (p *Parser) parseGrouping() (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	// Always wrap in a block node to establish a lexical scope
+	// If there's only one expression and no semicolons, return it directly
+	// This treats (expr) as pure grouping, not a block with new scope
+	if len(exprs) == 1 && !hasSemicolon {
+		return exprs[0], nil
+	}
+
+	// Otherwise, wrap in a block node to establish a lexical scope
 	blockNode := types.NewASTNode(types.NodeBlock, startPos)
 	blockNode.Expressions = exprs
 
