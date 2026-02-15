@@ -44,11 +44,8 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 	case types.NodeNumber:
 		return e.evalNumber(node)
 	case "value": // NodeBoolean or NodeNull
-		// Return the value directly (boolean or nil)
-		// Convert types.Null to nil
-		if _, ok := node.Value.(types.Null); ok {
-			return nil, nil
-		}
+		// Keep types.Null as-is during evaluation
+		// Will be converted to nil at final return
 		return node.Value, nil
 	case types.NodeName:
 		return e.evalName(node, evalCtx)

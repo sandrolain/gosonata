@@ -101,6 +101,9 @@ func (e *Evaluator) Eval(ctx context.Context, expr *types.Expression, data inter
 		return nil, err
 	}
 
+	// Convert types.Null to nil before returning
+	result = e.convertNullToNil(result)
+
 	// Singleton array unwrapping: JSONata unwraps singleton arrays at the top level
 	// UNLESS the expression has KeepArray flag set (e.g., using [] syntax)
 	if arr, ok := result.([]interface{}); ok && len(arr) == 1 {
@@ -151,7 +154,13 @@ func (e *Evaluator) EvalWithBindings(ctx context.Context, expr *types.Expression
 	evalCtx.SetBindings(bindings)
 
 	// Evaluate the AST
-	return e.evalNode(ctx, expr.AST(), evalCtx)
+	result, err := e.evalNode(ctx, expr.AST(), evalCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert types.Null to nil before returning
+	return e.convertNullToNil(result), nil
 }
 
 // EvalOption configures evaluation behavior.
@@ -196,5 +205,38 @@ func WithLogger(logger *slog.Logger) EvalOption {
 func WithMaxDepth(depth int) EvalOption {
 	return func(opts *EvalOptions) {
 		opts.MaxDepth = depth
+	}
+}
+
+// convertNullToNil recursively converts types.Null to nil in result values.
+// This is called at the final return to convert internal types.Null representation
+// (which is kept during evaluation to distinguish from undefined) to nil for external API.
+func (e *Evaluator) convertNullToNil(value interface{}) interface{} {
+	switch v := value.(type) {
+	case types.Null:
+		return nil
+	case []interface{}:
+		result := make([]interface{}, len(v))
+		for i, item := range v {
+			result[i] = e.convertNullToNil(item)
+		}
+		return result
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(v))
+		for key, item := range v {
+			result[key] = e.convertNullToNil(item)
+		}
+		return result
+	case *OrderedObject:
+		result := &OrderedObject{
+			Keys:   v.Keys,
+			Values: make(map[string]interface{}, len(v.Values)),
+		}
+		for key, item := range v.Values {
+			result.Values[key] = e.convertNullToNil(item)
+		}
+		return result
+	default:
+		return value
 	}
 }
