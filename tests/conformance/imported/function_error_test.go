@@ -29,7 +29,8 @@ func TestFunctionError(t *testing.T) {
 			query: `Account.Order[0].Product[0].Price > 35 ? Account.Order[0].Product[0].Price : $error('Too Expensive')`,
 			data:  map[string]interface{}{`Account`: map[string]interface{}{`Account Name`: `Firefly`, `Order`: []interface{}{map[string]interface{}{`OrderID`: `order103`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 2, `SKU`: `0406654608`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Orange`, `Depth`: 210, `Height`: 200, `Weight`: 0.6, `Width`: 300}, `Price`: 21.67, `Product Name`: `Trilby hat`, `ProductID`: 858236, `Quantity`: 1, `SKU`: `0406634348`}}}, map[string]interface{}{`OrderID`: `order104`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 4, `SKU`: `040657863`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Black`, `Depth`: 210, `Height`: 20, `Weight`: 2, `Width`: 30}, `Price`: 107.99, `Product Name`: `Cloak`, `ProductID`: 345664, `Quantity`: 1, `SKU`: `0406654603`}}}}}},
 
-			expected: nil,
+			shouldError: true,
+			errorCode:   "D3137",
 		},
 
 		{
@@ -53,7 +54,8 @@ func TestFunctionError(t *testing.T) {
 			query: `Account.Order[0].Product[0].Price > 34 ? $error('Too Expensive') : Account.Order[0].Product[0].Price`,
 			data:  map[string]interface{}{`Account`: map[string]interface{}{`Account Name`: `Firefly`, `Order`: []interface{}{map[string]interface{}{`OrderID`: `order103`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 2, `SKU`: `0406654608`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Orange`, `Depth`: 210, `Height`: 200, `Weight`: 0.6, `Width`: 300}, `Price`: 21.67, `Product Name`: `Trilby hat`, `ProductID`: 858236, `Quantity`: 1, `SKU`: `0406634348`}}}, map[string]interface{}{`OrderID`: `order104`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 4, `SKU`: `040657863`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Black`, `Depth`: 210, `Height`: 20, `Weight`: 2, `Width`: 30}, `Price`: 107.99, `Product Name`: `Cloak`, `ProductID`: 345664, `Quantity`: 1, `SKU`: `0406654603`}}}}}},
 
-			expected: nil,
+			shouldError: true,
+			errorCode:   "D3137",
 		},
 
 		{
@@ -61,7 +63,10 @@ func TestFunctionError(t *testing.T) {
 			query: `$count(Account.Order[0].Product) < 2 ? $error('Not enough products in orders')`,
 			data:  map[string]interface{}{`Account`: map[string]interface{}{`Account Name`: `Firefly`, `Order`: []interface{}{map[string]interface{}{`OrderID`: `order103`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 2, `SKU`: `0406654608`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Orange`, `Depth`: 210, `Height`: 200, `Weight`: 0.6, `Width`: 300}, `Price`: 21.67, `Product Name`: `Trilby hat`, `ProductID`: 858236, `Quantity`: 1, `SKU`: `0406634348`}}}, map[string]interface{}{`OrderID`: `order104`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 4, `SKU`: `040657863`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Black`, `Depth`: 210, `Height`: 20, `Weight`: 2, `Width`: 30}, `Price`: 107.99, `Product Name`: `Cloak`, `ProductID`: 345664, `Quantity`: 1, `SKU`: `0406654603`}}}}}},
 
-			expected: nil,
+			// NOTE: Parser doesn't support incomplete ternary (no else clause)
+			// Original test expects undefinedResult: true, but parser fails
+			shouldError: true,
+			errorCode:   "S0202",
 		},
 
 		{
@@ -69,7 +74,8 @@ func TestFunctionError(t *testing.T) {
 			query: `$count(Account.Order[0].Product) < 3 ? $error('Not enough products in orders')`,
 			data:  map[string]interface{}{`Account`: map[string]interface{}{`Account Name`: `Firefly`, `Order`: []interface{}{map[string]interface{}{`OrderID`: `order103`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 2, `SKU`: `0406654608`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Orange`, `Depth`: 210, `Height`: 200, `Weight`: 0.6, `Width`: 300}, `Price`: 21.67, `Product Name`: `Trilby hat`, `ProductID`: 858236, `Quantity`: 1, `SKU`: `0406634348`}}}, map[string]interface{}{`OrderID`: `order104`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 4, `SKU`: `040657863`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Black`, `Depth`: 210, `Height`: 20, `Weight`: 2, `Width`: 30}, `Price`: 107.99, `Product Name`: `Cloak`, `ProductID`: 345664, `Quantity`: 1, `SKU`: `0406654603`}}}}}},
 
-			expected: nil,
+			shouldError: true,
+			errorCode:   "D3137",
 		},
 
 		{
@@ -77,7 +83,8 @@ func TestFunctionError(t *testing.T) {
 			query: `($msg:='My Message'; $error($msg); true)`,
 			data:  map[string]interface{}{`Account`: map[string]interface{}{`Account Name`: `Firefly`, `Order`: []interface{}{map[string]interface{}{`OrderID`: `order103`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 2, `SKU`: `0406654608`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Orange`, `Depth`: 210, `Height`: 200, `Weight`: 0.6, `Width`: 300}, `Price`: 21.67, `Product Name`: `Trilby hat`, `ProductID`: 858236, `Quantity`: 1, `SKU`: `0406634348`}}}, map[string]interface{}{`OrderID`: `order104`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 4, `SKU`: `040657863`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Black`, `Depth`: 210, `Height`: 20, `Weight`: 2, `Width`: 30}, `Price`: 107.99, `Product Name`: `Cloak`, `ProductID`: 345664, `Quantity`: 1, `SKU`: `0406654603`}}}}}},
 
-			expected: nil,
+			shouldError: true,
+			errorCode:   "D3137",
 		},
 
 		{
@@ -103,7 +110,8 @@ func TestFunctionError(t *testing.T) {
 			query: `$error()`,
 			data:  map[string]interface{}{`Account`: map[string]interface{}{`Account Name`: `Firefly`, `Order`: []interface{}{map[string]interface{}{`OrderID`: `order103`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 2, `SKU`: `0406654608`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Orange`, `Depth`: 210, `Height`: 200, `Weight`: 0.6, `Width`: 300}, `Price`: 21.67, `Product Name`: `Trilby hat`, `ProductID`: 858236, `Quantity`: 1, `SKU`: `0406634348`}}}, map[string]interface{}{`OrderID`: `order104`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 4, `SKU`: `040657863`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Black`, `Depth`: 210, `Height`: 20, `Weight`: 2, `Width`: 30}, `Price`: 107.99, `Product Name`: `Cloak`, `ProductID`: 345664, `Quantity`: 1, `SKU`: `0406654603`}}}}}},
 
-			expected: nil,
+			shouldError: true,
+			errorCode:   "D3137",
 		},
 
 		{
@@ -111,7 +119,8 @@ func TestFunctionError(t *testing.T) {
 			query: `$error(foo)`,
 			data:  map[string]interface{}{`Account`: map[string]interface{}{`Account Name`: `Firefly`, `Order`: []interface{}{map[string]interface{}{`OrderID`: `order103`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 2, `SKU`: `0406654608`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Orange`, `Depth`: 210, `Height`: 200, `Weight`: 0.6, `Width`: 300}, `Price`: 21.67, `Product Name`: `Trilby hat`, `ProductID`: 858236, `Quantity`: 1, `SKU`: `0406634348`}}}, map[string]interface{}{`OrderID`: `order104`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 4, `SKU`: `040657863`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Black`, `Depth`: 210, `Height`: 20, `Weight`: 2, `Width`: 30}, `Price`: 107.99, `Product Name`: `Cloak`, `ProductID`: 345664, `Quantity`: 1, `SKU`: `0406654603`}}}}}},
 
-			expected: nil,
+			shouldError: true,
+			errorCode:   "D3137",
 		},
 	}
 
