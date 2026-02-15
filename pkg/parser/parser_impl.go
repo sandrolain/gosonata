@@ -352,9 +352,19 @@ func (p *Parser) parseGrouping() (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	// If there's only one expression and no semicolons, return it directly
-	// This treats (expr) as pure grouping, not a block with new scope
+	// If there's only one expression and no semicolons, we still need to check
+	// if the expression requires a new scope (like variable assignment).
+	// According to JSONata semantics, parentheses isolate variable assignments
+	// even with a single expression, so we need to wrap in a block.
 	if len(exprs) == 1 && !hasSemicolon {
+		// Check if the expression is a bind (assignment) - if so, wrap in block
+		if exprs[0].Type == types.NodeBind {
+			// Wrap in block to create a new scope
+			blockNode := types.NewASTNode(types.NodeBlock, startPos)
+			blockNode.Expressions = exprs
+			return blockNode, nil
+		}
+		// For other single expressions, return directly (pure grouping)
 		return exprs[0], nil
 	}
 

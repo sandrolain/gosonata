@@ -8,13 +8,13 @@ import (
 type EvalContext struct {
 	// data is the current context data ($)
 	data interface{}
-	
+
 	// parent is the parent context ($$)
 	parent *EvalContext
-	
+
 	// bindings stores variable assignments
 	bindings map[string]interface{}
-	
+
 	// depth tracks recursion depth to prevent stack overflow
 	depth int
 }
@@ -66,12 +66,12 @@ func (c *EvalContext) GetBinding(name string) (interface{}, bool) {
 	if value, ok := c.bindings[name]; ok {
 		return value, true
 	}
-	
+
 	// Check parent context
 	if c.parent != nil {
 		return c.parent.GetBinding(name)
 	}
-	
+
 	return nil, false
 }
 
@@ -88,7 +88,7 @@ func (c *EvalContext) Clone() *EvalContext {
 	for k, v := range c.bindings {
 		newBindings[k] = v
 	}
-	
+
 	return &EvalContext{
 		data:     c.data,
 		parent:   c.parent,
