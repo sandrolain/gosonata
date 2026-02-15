@@ -6,6 +6,7 @@ import (
 	"math"
 	"reflect"
 	"sort"
+	"strings"
 )
 
 // CompareResults compares actual result with expected result
@@ -119,6 +120,91 @@ func deepEqual(a, b interface{}) bool {
 			}
 		}
 		return true
+	}
+
+	// Handle OrderedObject (from GoSonata evaluator) - check by string type name
+	aTypeName := reflect.TypeOf(a).String()
+	bTypeName := reflect.TypeOf(b).String()
+
+	aIsOrderedObject := strings.Contains(aTypeName, "OrderedObject")
+	bIsOrderedObject := strings.Contains(bTypeName, "OrderedObject")
+
+	// OrderedObject vs map comparison
+	if aIsOrderedObject && !bIsOrderedObject {
+		bMap, bIsMap := b.(map[string]interface{})
+		if bIsMap {
+			aVal := reflect.ValueOf(a)
+			if aVal.Kind() == reflect.Ptr {
+				aVal = aVal.Elem()
+			}
+			aValuesField := aVal.FieldByName("Values")
+			if aValuesField.IsValid() {
+				aMapIface := aValuesField.Interface()
+				if aMap, ok := aMapIface.(map[string]interface{}); ok {
+					return deepEqual(aMap, bMap)
+				}
+			}
+		}
+	}
+
+	// map vs OrderedObject comparison
+	if !aIsOrderedObject && bIsOrderedObject {
+		aMap, aIsMap := a.(map[string]interface{})
+		if aIsMap {
+			bVal := reflect.ValueOf(b)
+			if bVal.Kind() == reflect.Ptr {
+				bVal = bVal.Elem()
+			}
+			bValuesField := bVal.FieldByName("Values")
+			if bValuesField.IsValid() {
+				bMapIface := bValuesField.Interface()
+				if bMap, ok := bMapIface.(map[string]interface{}); ok {
+					return deepEqual(aMap, bMap)
+				}
+			}
+		}
+	}
+
+	// Both are OrderedObjects
+	if aIsOrderedObject && bIsOrderedObject {
+		// Both are OrderedObjects, compare using reflection
+		aVal := reflect.ValueOf(a)
+		bVal := reflect.ValueOf(b)
+
+		// Dereference pointers if needed
+		if aVal.Kind() == reflect.Ptr {
+			aVal = aVal.Elem()
+		}
+		if bVal.Kind() == reflect.Ptr {
+			bVal = bVal.Elem()
+		}
+
+		aValuesField := aVal.FieldByName("Values")
+		bValuesField := bVal.FieldByName("Values")
+
+		if aValuesField.IsValid() && bValuesField.IsValid() {
+			aMapIface := aValuesField.Interface()
+			bMapIface := bValuesField.Interface()
+
+			aMap, aOk := aMapIface.(map[string]interface{})
+			bMap, bOk := bMapIface.(map[string]interface{})
+
+			if aOk && bOk {
+				if len(aMap) != len(bMap) {
+					return false
+				}
+				for k, v := range aMap {
+					bv, ok := bMap[k]
+					if !ok {
+						return false
+					}
+					if !deepEqual(v, bv) {
+						return false
+					}
+				}
+				return true
+			}
+		}
 	}
 
 	return false

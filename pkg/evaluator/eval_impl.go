@@ -308,6 +308,8 @@ func (e *Evaluator) evalBinary(ctx context.Context, node *types.ASTNode, evalCtx
 		return e.evalAnd(ctx, node, evalCtx)
 	case "or":
 		return e.evalOr(ctx, node, evalCtx)
+	case "??":
+		return e.evalCoalesce(ctx, node, evalCtx)
 	case "..":
 		return e.evalRange(ctx, node, evalCtx)
 	case "~>":
@@ -1140,6 +1142,34 @@ func (e *Evaluator) evalOr(ctx context.Context, node *types.ASTNode, evalCtx *Ev
 	}
 
 	return e.isTruthy(right), nil
+}
+
+// evalCoalesce evaluates null coalescing operator (??).
+// Returns left value if defined (not nil), otherwise returns right value.
+// Note: differs from default operator - null is considered a valid value.
+func (e *Evaluator) evalCoalesce(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	left, err := e.evalNode(ctx, node.LHS, evalCtx)
+	if err != nil {
+		// If left side errors, use right side
+		right, err2 := e.evalNode(ctx, node.RHS, evalCtx)
+		if err2 != nil {
+			return nil, err2
+		}
+		return right, nil
+	}
+
+	// If left is not nil, return it (even if it's false, 0, empty string, etc.)
+	if left != nil {
+		return left, nil
+	}
+
+	// Left is nil/undefined, return right
+	right, err := e.evalNode(ctx, node.RHS, evalCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	return right, nil
 }
 
 // evalRange evaluates a range expression.

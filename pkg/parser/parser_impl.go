@@ -62,6 +62,7 @@ func (p *Parser) Parse() (*types.Expression, error) {
 var precedence = map[TokenType]int{
 	TokenOr:           25, // or
 	TokenAnd:          30, // and
+	TokenCoalesce:     26, // ?? (coalescing, between or and and)
 	TokenEqual:        40, // =
 	TokenNotEqual:     40, // !=
 	TokenLess:         40, // <
@@ -232,7 +233,7 @@ func (p *Parser) parseInfix(left *types.ASTNode) (*types.ASTNode, error) {
 	case TokenPlus, TokenMinus, TokenMult, TokenDiv, TokenMod,
 		TokenEqual, TokenNotEqual, TokenLess, TokenLessEqual,
 		TokenGreater, TokenGreaterEqual, TokenConcat,
-		TokenAnd, TokenOr, TokenIn:
+		TokenAnd, TokenOr, TokenIn, TokenCoalesce:
 		return p.parseBinaryOp(left)
 	default:
 		return nil, p.error("S0201", fmt.Sprintf("Unexpected infix token: %s", token.Type.String()))
@@ -859,6 +860,8 @@ func operatorString(tt TokenType) string {
 		return ".."
 	case TokenApply:
 		return "~>"
+	case TokenCoalesce:
+		return "??"
 	default:
 		return tt.String()
 	}

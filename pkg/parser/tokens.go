@@ -58,6 +58,7 @@ const (
 	TokenApply      // ~>
 	TokenAssign     // :=
 	TokenDescendent // **
+	TokenCoalesce   // ??
 
 	// Keyword operators
 	TokenAnd // and
@@ -144,6 +145,8 @@ func (tt TokenType) String() string {
 		return ":="
 	case TokenDescendent:
 		return "**"
+	case TokenCoalesce:
+		return "??"
 	case TokenAnd:
 		return "and"
 	case TokenOr:
@@ -204,6 +207,7 @@ var symbols2 = [...][]runeTokenType{
 	'~': {{'>', TokenApply}},
 	':': {{'=', TokenAssign}},
 	'*': {{'*', TokenDescendent}},
+	'?': {{'?', TokenCoalesce}},
 }
 
 const (
