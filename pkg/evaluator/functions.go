@@ -662,7 +662,12 @@ func fnSubstring(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args [
 		return nil, err
 	}
 
-	endIdx := startIdx + int(length)
+	lengthInt := int(length)
+	if lengthInt <= 0 {
+		return "", nil
+	}
+
+	endIdx := startIdx + lengthInt
 	if endIdx > len(str) {
 		endIdx = len(str)
 	}
