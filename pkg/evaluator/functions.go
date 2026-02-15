@@ -1091,9 +1091,8 @@ func fnSpreadRecursive(ctx context.Context, e *Evaluator, evalCtx *EvalContext, 
 	case *OrderedObject:
 		// Create single-key objects for each property
 		for _, k := range v.Keys {
-			item := &OrderedObject{
-				Keys:   []string{k},
-				Values: map[string]interface{}{k: v.Values[k]},
+			item := map[string]interface{}{
+				k: v.Values[k],
 			}
 			result = append(result, item)
 		}
@@ -1105,9 +1104,8 @@ func fnSpreadRecursive(ctx context.Context, e *Evaluator, evalCtx *EvalContext, 
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			item := &OrderedObject{
-				Keys:   []string{k},
-				Values: map[string]interface{}{k: v[k]},
+			item := map[string]interface{}{
+				k: v[k],
 			}
 			result = append(result, item)
 		}

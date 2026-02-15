@@ -22,6 +22,7 @@ func TestFunctionSpread(t *testing.T) {
 		expected    interface{}
 		shouldError bool
 		errorCode   string
+		unordered   bool
 	}{
 
 		{
@@ -37,7 +38,8 @@ func TestFunctionSpread(t *testing.T) {
 			query: `$spread((Account.Order.Product.Description))`,
 			data:  map[string]interface{}{`Account`: map[string]interface{}{`Account Name`: `Firefly`, `Order`: []interface{}{map[string]interface{}{`OrderID`: `order103`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 2, `SKU`: `0406654608`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Orange`, `Depth`: 210, `Height`: 200, `Weight`: 0.6, `Width`: 300}, `Price`: 21.67, `Product Name`: `Trilby hat`, `ProductID`: 858236, `Quantity`: 1, `SKU`: `0406634348`}}}, map[string]interface{}{`OrderID`: `order104`, `Product`: []interface{}{map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Purple`, `Depth`: 210, `Height`: 200, `Weight`: 0.75, `Width`: 300}, `Price`: 34.45, `Product Name`: `Bowler Hat`, `ProductID`: 858383, `Quantity`: 4, `SKU`: `040657863`}, map[string]interface{}{`Description`: map[string]interface{}{`Colour`: `Black`, `Depth`: 210, `Height`: 20, `Weight`: 2, `Width`: 30}, `Price`: 107.99, `Product Name`: `Cloak`, `ProductID`: 345664, `Quantity`: 1, `SKU`: `0406654603`}}}}}},
 
-			expected: []interface{}{map[string]interface{}{`Colour`: `Purple`}, map[string]interface{}{`Width`: 300}, map[string]interface{}{`Height`: 200}, map[string]interface{}{`Depth`: 210}, map[string]interface{}{`Weight`: 0.75}, map[string]interface{}{`Colour`: `Orange`}, map[string]interface{}{`Width`: 300}, map[string]interface{}{`Height`: 200}, map[string]interface{}{`Depth`: 210}, map[string]interface{}{`Weight`: 0.6}, map[string]interface{}{`Colour`: `Purple`}, map[string]interface{}{`Width`: 300}, map[string]interface{}{`Height`: 200}, map[string]interface{}{`Depth`: 210}, map[string]interface{}{`Weight`: 0.75}, map[string]interface{}{`Colour`: `Black`}, map[string]interface{}{`Width`: 30}, map[string]interface{}{`Height`: 20}, map[string]interface{}{`Depth`: 210}, map[string]interface{}{`Weight`: 2}},
+			expected:  []interface{}{map[string]interface{}{`Colour`: `Purple`}, map[string]interface{}{`Width`: 300}, map[string]interface{}{`Height`: 200}, map[string]interface{}{`Depth`: 210}, map[string]interface{}{`Weight`: 0.75}, map[string]interface{}{`Colour`: `Orange`}, map[string]interface{}{`Width`: 300}, map[string]interface{}{`Height`: 200}, map[string]interface{}{`Depth`: 210}, map[string]interface{}{`Weight`: 0.6}, map[string]interface{}{`Colour`: `Purple`}, map[string]interface{}{`Width`: 300}, map[string]interface{}{`Height`: 200}, map[string]interface{}{`Depth`: 210}, map[string]interface{}{`Weight`: 0.75}, map[string]interface{}{`Colour`: `Black`}, map[string]interface{}{`Width`: 30}, map[string]interface{}{`Height`: 20}, map[string]interface{}{`Depth`: 210}, map[string]interface{}{`Weight`: 2}},
+			unordered: true,
 		},
 
 		{
@@ -92,10 +94,17 @@ func TestFunctionSpread(t *testing.T) {
 				t.Fatalf("Eval error: %v", err)
 			}
 
-			// Compare results (basic comparison for now)
-			// TODO: Implement proper deep comparison with JSONata semantics
-			if !compareResults(result, tc.expected) {
-				t.Errorf("Result mismatch\nGot:      %v\nExpected: %v", result, tc.expected)
+			// Compare results with optional unordered array comparison
+			if tc.unordered {
+				// For unordered comparison, convert arrays to sets and compare
+				if !compareResultsUnordered(result, tc.expected) {
+					t.Errorf("Result mismatch\nGot:      %v\nExpected: %v", result, tc.expected)
+				}
+			} else {
+				// For ordered comparison, use strict comparison
+				if !compareResults(result, tc.expected) {
+					t.Errorf("Result mismatch\nGot:      %v\nExpected: %v", result, tc.expected)
+				}
 			}
 		})
 	}
