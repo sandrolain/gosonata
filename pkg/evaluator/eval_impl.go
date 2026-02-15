@@ -601,7 +601,19 @@ func (e *Evaluator) evalArray(ctx context.Context, node *types.ASTNode, evalCtx 
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, value)
+
+		// Flatten arrays from range operators or other operations that generate arrays
+		// BUT do NOT flatten explicitly nested array literals like [[1,2,3]]
+		// Only flatten if the expression is NOT an array literal (NodeArray)
+		if value != nil {
+			if subArr, isArr := value.([]interface{}); isArr && expr.Type != types.NodeArray {
+				// Flatten: this is an array from a range or other operation
+				result = append(result, subArr...)
+			} else {
+				// Keep as-is: either not an array, or an explicit array literal
+				result = append(result, value)
+			}
+		}
 	}
 
 	return result, nil

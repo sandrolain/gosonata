@@ -106,10 +106,15 @@ func (e *Evaluator) Eval(ctx context.Context, expr *types.Expression, data inter
 
 	// Singleton array unwrapping: JSONata unwraps singleton arrays at the top level
 	// UNLESS the expression has KeepArray flag set (e.g., using [] syntax)
+	// OR the root expression is an array literal (to preserve [[x]] as [[x]])
 	if arr, ok := result.([]interface{}); ok && len(arr) == 1 {
 		// Check if we should keep the array structure
 		keepArray := expr.AST().KeepArray || hasKeepArrayInASTChain(expr.AST())
-		if !keepArray {
+
+		// Also keep array if the root is an array literal
+		isArrayLiteral := expr.AST().Type == types.NodeArray
+
+		if !keepArray && !isArrayLiteral {
 			return arr[0], nil
 		}
 	}
