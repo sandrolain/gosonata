@@ -758,13 +758,13 @@ func fnJoin(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inte
 func fnType(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
 	value := args[0]
 
-	// Check for JSONata null (types.Null) first
-	if _, ok := value.(types.Null); ok {
-		return "null", nil
+	// undefined (nil) returns undefined (not "null")
+	if value == nil {
+		return nil, nil
 	}
 
-	// undefined (nil) also returns "null" per JSONata spec
-	if value == nil {
+	// Check for JSONata null (types.Null) - returns "null"
+	if _, ok := value.(types.Null); ok {
 		return "null", nil
 	}
 
@@ -1852,8 +1852,8 @@ func fnFormatBase(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args 
 		}
 	}
 
-	// Convert to integer and format in specified base
-	intNum := int64(num)
+	// Round to nearest integer using banker's rounding
+	intNum := int64(roundBankers(num, 0))
 	return strconv.FormatInt(intNum, radix), nil
 }
 
