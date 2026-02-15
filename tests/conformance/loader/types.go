@@ -6,12 +6,14 @@ import "encoding/json"
 type TestCase struct {
 	ID              string                 `json:"id"`
 	Expr            string                 `json:"expr"`
-	Dataset         *string                `json:"dataset"`       // null or dataset name
+	ExprFile        string                 `json:"expr-file"` // File to read expression from
+	Dataset         *string                `json:"dataset"`   // null or dataset name
 	Data            json.RawMessage        `json:"data,omitempty"`
 	Bindings        map[string]interface{} `json:"bindings"`
 	Result          interface{}            `json:"result,omitempty"`
 	UndefinedResult bool                   `json:"undefinedResult"`
 	Error           *ErrorInfo             `json:"error,omitempty"`
+	Code            string                 `json:"code,omitempty"`   // Error code (direct field when no error object)
 	Timelimit       *int                   `json:"timelimit"`
 	Depth           *int                   `json:"depth"`
 	Unordered       bool                   `json:"unordered"`

@@ -41,6 +41,11 @@ func NewLexer(input string) *Lexer {
 func (l *Lexer) Next(allowRegex bool) Token {
 	l.skipWhitespace()
 
+	// Check if skipWhitespace encountered an error (e.g., unclosed comment)
+	if l.err != nil {
+		return l.error(types.ErrCommentNotClosed, l.err.Error())
+	}
+
 	ch := l.nextRune()
 	if ch == eof {
 		return l.eof()
@@ -337,8 +342,49 @@ func (l *Lexer) acceptAll(isValid func(rune) bool) bool {
 }
 
 func (l *Lexer) skipWhitespace() {
-	l.acceptAll(isWhitespace)
-	l.ignore()
+	for {
+		// If an error occurred (e.g., unclosed comment), stop
+		if l.err != nil {
+			return
+		}
+
+		// Skip whitespace
+		l.acceptAll(isWhitespace)
+		l.ignore()
+
+		// Check for comment start /*
+		if l.acceptRune('/') {
+			if l.acceptRune('*') {
+				// Found comment start /*
+				// Scan until we find */
+				for {
+					ch := l.nextRune()
+					if ch == eof {
+						l.err = &types.Error{
+							Code:     types.ErrCommentNotClosed,
+							Message:  "Unclosed comment",
+							Position: l.current,
+						}
+						return
+					}
+					if ch == '*' {
+						if l.acceptRune('/') {
+							// Found comment end */
+							break
+						}
+					}
+				}
+				l.ignore()
+			} else {
+				// Not a comment, backup
+				l.backup()
+				break
+			}
+		} else {
+			// No '/', no comment
+			break
+		}
+	}
 }
 
 // Character classification functions

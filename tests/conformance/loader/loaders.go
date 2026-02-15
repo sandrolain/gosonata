@@ -94,6 +94,15 @@ func LoadTestCase(groupPath, caseID string) (*TestCase, error) {
 	// Try to unmarshal as single TestCase first
 	var testCase TestCase
 	if err := json.Unmarshal(data, &testCase); err == nil {
+		// If expr-file is specified, load expression from file
+		if testCase.ExprFile != "" && testCase.Expr == "" {
+			exprFilePath := filepath.Join(groupPath, testCase.ExprFile)
+			exprData, err := ioutil.ReadFile(exprFilePath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read expression file %s: %w", exprFilePath, err)
+			}
+			testCase.Expr = string(exprData)
+		}
 		return &testCase, nil
 	}
 
@@ -107,7 +116,20 @@ func LoadTestCase(groupPath, caseID string) (*TestCase, error) {
 		return nil, fmt.Errorf("empty test case array")
 	}
 
-	return &testCases[0], nil
+	// Get pointer to first test case
+	firstCase := &testCases[0]
+
+	// If expr-file is specified, load expression from file
+	if firstCase.ExprFile != "" && firstCase.Expr == "" {
+		exprFilePath := filepath.Join(groupPath, firstCase.ExprFile)
+		exprData, err := ioutil.ReadFile(exprFilePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read expression file %s: %w", exprFilePath, err)
+		}
+		firstCase.Expr = string(exprData)
+	}
+
+	return firstCase, nil
 }
 
 // LoadSuite loads the entire suite (groups + datasets)

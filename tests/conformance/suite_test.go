@@ -37,7 +37,10 @@ func TestOfficialSuite(t *testing.T) {
 			var groupPassed int
 			var groupFailed int
 
-			for _, testCase := range group.Cases {
+			for _, testCase := range group.Cases {					// Ensure Error is set if Code is present
+					if testCase.Code != "" && testCase.Error == nil {
+						testCase.Error = &loader.ErrorInfo{Code: testCase.Code}
+					}
 				t.Run(testCase.ID, func(t *testing.T) {
 					// Get test data
 					data, err := loader.GetData(testCase, suite.Datasets)

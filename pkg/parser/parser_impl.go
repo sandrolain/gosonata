@@ -41,6 +41,11 @@ func NewParser(input string, opts ...CompileOption) *Parser {
 
 // Parse parses the entire expression and returns the root AST node.
 func (p *Parser) Parse() (*types.Expression, error) {
+	// Check for lexer errors (e.g., unclosed comment)
+	if p.current.Type == TokenError {
+		return nil, p.lexer.Error()
+	}
+
 	if p.current.Type == TokenEOF {
 		return nil, p.error("S0201", "Empty expression")
 	}
