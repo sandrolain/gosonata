@@ -88,23 +88,29 @@ func initBuiltinFunctions() {
 			"max":     {Name: "max", MinArgs: 1, MaxArgs: 1, Impl: fnMax},
 
 			// Array functions
-			"map":     {Name: "map", MinArgs: 2, MaxArgs: 2, Impl: fnMap},
-			"filter":  {Name: "filter", MinArgs: 2, MaxArgs: 2, Impl: fnFilter},
-			"reduce":  {Name: "reduce", MinArgs: 2, MaxArgs: 3, Impl: fnReduce},
-			"sort":    {Name: "sort", MinArgs: 1, MaxArgs: 2, Impl: fnSort},
-			"append":  {Name: "append", MinArgs: 2, MaxArgs: 2, Impl: fnAppend},
-			"reverse": {Name: "reverse", MinArgs: 1, MaxArgs: 1, Impl: fnReverse},
+			"map":      {Name: "map", MinArgs: 2, MaxArgs: 2, Impl: fnMap},
+			"filter":   {Name: "filter", MinArgs: 2, MaxArgs: 2, Impl: fnFilter},
+			"reduce":   {Name: "reduce", MinArgs: 2, MaxArgs: 3, Impl: fnReduce},
+			"sort":     {Name: "sort", MinArgs: 1, MaxArgs: 2, Impl: fnSort},
+			"append":   {Name: "append", MinArgs: 2, MaxArgs: 2, Impl: fnAppend},
+			"reverse":  {Name: "reverse", MinArgs: 1, MaxArgs: 1, Impl: fnReverse},
+			"distinct": {Name: "distinct", MinArgs: 1, MaxArgs: 1, Impl: fnDistinct},
+			"shuffle":  {Name: "shuffle", MinArgs: 1, MaxArgs: 1, Impl: fnShuffle},
+			"zip":      {Name: "zip", MinArgs: 1, MaxArgs: -1, Impl: fnZip},
 
 			// String functions
-			"string":    {Name: "string", MinArgs: 0, MaxArgs: 2, Impl: fnString},
-			"length":    {Name: "length", MinArgs: 1, MaxArgs: 1, Impl: fnLength},
-			"substring": {Name: "substring", MinArgs: 2, MaxArgs: 3, Impl: fnSubstring},
-			"uppercase": {Name: "uppercase", MinArgs: 1, MaxArgs: 1, Impl: fnUppercase},
-			"lowercase": {Name: "lowercase", MinArgs: 1, MaxArgs: 1, Impl: fnLowercase},
-			"trim":      {Name: "trim", MinArgs: 1, MaxArgs: 1, Impl: fnTrim},
-			"contains":  {Name: "contains", MinArgs: 2, MaxArgs: 2, Impl: fnContains},
-			"split":     {Name: "split", MinArgs: 2, MaxArgs: 3, Impl: fnSplit},
-			"join":      {Name: "join", MinArgs: 1, MaxArgs: 2, Impl: fnJoin},
+			"string":          {Name: "string", MinArgs: 0, MaxArgs: 2, Impl: fnString},
+			"length":          {Name: "length", MinArgs: 1, MaxArgs: 1, Impl: fnLength},
+			"substring":       {Name: "substring", MinArgs: 2, MaxArgs: 3, Impl: fnSubstring},
+			"uppercase":       {Name: "uppercase", MinArgs: 1, MaxArgs: 1, Impl: fnUppercase},
+			"lowercase":       {Name: "lowercase", MinArgs: 1, MaxArgs: 1, Impl: fnLowercase},
+			"trim":            {Name: "trim", MinArgs: 1, MaxArgs: 1, Impl: fnTrim},
+			"contains":        {Name: "contains", MinArgs: 2, MaxArgs: 2, Impl: fnContains},
+			"split":           {Name: "split", MinArgs: 2, MaxArgs: 3, Impl: fnSplit},
+			"join":            {Name: "join", MinArgs: 1, MaxArgs: 2, Impl: fnJoin},
+			"pad":             {Name: "pad", MinArgs: 2, MaxArgs: 3, Impl: fnPad},
+			"substringBefore": {Name: "substringBefore", MinArgs: 2, MaxArgs: 2, Impl: fnSubstringBefore},
+			"substringAfter":  {Name: "substringAfter", MinArgs: 2, MaxArgs: 2, Impl: fnSubstringAfter},
 
 			// Type functions
 			"type":    {Name: "type", MinArgs: 1, MaxArgs: 1, Impl: fnType},
@@ -1526,4 +1532,207 @@ func parseTimestampWithPicture(timestamp, picture string) (interface{}, error) {
 	// Create time and convert to milliseconds
 	t := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
 	return float64(t.UnixMilli()), nil
+}
+
+// --- Enhanced Array Functions (Fase 5.2) ---
+
+// fnDistinct removes duplicate values from an array.
+// Signature: $distinct(array)
+func fnDistinct(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	arr, err := e.toArray(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	// Use a map to track seen values
+	// Note: This uses string representation for comparison, which may not be perfect
+	// for complex objects but works for primitive types
+	seen := make(map[string]bool)
+	result := make([]interface{}, 0)
+
+	for _, item := range arr {
+		// Serialize item to string for comparison
+		key := fmt.Sprintf("%v", item)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, item)
+		}
+	}
+
+	if len(result) == 0 {
+		return nil, nil
+	}
+	return result, nil
+}
+
+// fnShuffle randomly shuffles an array.
+// Signature: $shuffle(array)
+func fnShuffle(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	arr, err := e.toArray(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	// Make a copy to avoid modifying the original
+	result := make([]interface{}, len(arr))
+	copy(result, arr)
+
+	// Fisher-Yates shuffle
+	rand.Shuffle(len(result), func(i, j int) {
+		result[i], result[j] = result[j], result[i]
+	})
+
+	return result, nil
+}
+
+// fnZip convolves multiple arrays into an array of tuples.
+// Signature: $zip(array1, array2, ...)
+// Returns array of arrays, where each sub-array contains one element from each input array.
+func fnZip(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if len(args) == 0 {
+		return []interface{}{}, nil
+	}
+
+	// Handle undefined
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	// Convert all args to arrays
+	arrays := make([][]interface{}, len(args))
+	maxLen := 0
+
+	for i, arg := range args {
+		if arg == nil {
+			arrays[i] = []interface{}{}
+			continue
+		}
+
+		arr, err := e.toArray(arg)
+		if err != nil {
+			return nil, err
+		}
+		arrays[i] = arr
+		if len(arr) > maxLen {
+			maxLen = len(arr)
+		}
+	}
+
+	// Zip arrays together
+	result := make([]interface{}, maxLen)
+	for i := 0; i < maxLen; i++ {
+		tuple := make([]interface{}, len(arrays))
+		for j, arr := range arrays {
+			if i < len(arr) {
+				tuple[j] = arr[i]
+			} else {
+				tuple[j] = nil
+			}
+		}
+		result[i] = tuple
+	}
+
+	return result, nil
+}
+
+// --- Enhanced String Functions (Fase 5.2) ---
+
+// fnPad pads a string to a target width.
+// Signature: $pad(str, width [, char])
+// Pads on the right by default, negative width pads on the left.
+func fnPad(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	str := e.toString(args[0])
+
+	width, err := e.toNumber(args[1])
+	if err != nil {
+		return nil, err
+	}
+	targetWidth := int(width)
+
+	// Default pad character is space
+	padChar := " "
+	if len(args) > 2 && args[2] != nil {
+		padChar = e.toString(args[2])
+		if len(padChar) == 0 {
+			padChar = " "
+		}
+	}
+
+	// Determine padding direction
+	leftPad := targetWidth < 0
+	if leftPad {
+		targetWidth = -targetWidth
+	}
+
+	// Calculate padding needed
+	strLen := len(str)
+	if strLen >= targetWidth {
+		return str, nil
+	}
+
+	padCount := targetWidth - strLen
+	padding := strings.Repeat(padChar, padCount)
+
+	if leftPad {
+		return padding + str, nil
+	}
+	return str + padding, nil
+}
+
+// fnSubstringBefore returns the substring before the first occurrence of a separator.
+// Signature: $substringBefore(str, separator)
+func fnSubstringBefore(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	str := e.toString(args[0])
+	separator := e.toString(args[1])
+
+	// If separator is empty, return empty string
+	if separator == "" {
+		return "", nil
+	}
+
+	idx := strings.Index(str, separator)
+	if idx < 0 {
+		return "", nil
+	}
+
+	return str[:idx], nil
+}
+
+// fnSubstringAfter returns the substring after the first occurrence of a separator.
+// Signature: $substringAfter(str, separator)
+func fnSubstringAfter(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	str := e.toString(args[0])
+	separator := e.toString(args[1])
+
+	// If separator is empty, return the original string
+	if separator == "" {
+		return str, nil
+	}
+
+	idx := strings.Index(str, separator)
+	if idx < 0 {
+		return "", nil
+	}
+
+	return str[idx+len(separator):], nil
 }
