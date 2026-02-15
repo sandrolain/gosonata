@@ -676,11 +676,17 @@ func fnSubstring(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args [
 }
 
 func fnUppercase(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
 	str := e.toString(args[0])
 	return strings.ToUpper(str), nil
 }
 
 func fnLowercase(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
 	str := e.toString(args[0])
 	return strings.ToLower(str), nil
 }
