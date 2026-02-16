@@ -186,8 +186,19 @@ func (e *Evaluator) evalVariable(node *types.ASTNode, evalCtx *EvalContext) (int
 
 // evalPath evaluates a path expression (field navigation).
 func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	// Evaluate left side
-	left, err := e.evalNode(ctx, node.LHS, evalCtx)
+	// Special case: if LHS is a string literal, treat it as a field name in current context
+	var left interface{}
+	var err error
+
+	if node.LHS.Type == types.NodeString {
+		// String literal as LHS means field name lookup in current context
+		fieldName := node.LHS.Value.(string)
+		left, err = e.evalNameString(fieldName, evalCtx)
+	} else {
+		// Normal evaluation of LHS
+		left, err = e.evalNode(ctx, node.LHS, evalCtx)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -289,8 +300,19 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 // evalDescendent evaluates a descendent expression (recursive field search).
 // The descendent operator ** returns ALL descendants, then RHS is applied as a path to each.
 func (e *Evaluator) evalDescendent(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	// Evaluate left side
-	left, err := e.evalNode(ctx, node.LHS, evalCtx)
+	// Special case: if LHS is a string literal, treat it as a field name in current context
+	var left interface{}
+	var err error
+
+	if node.LHS.Type == types.NodeString {
+		// String literal as LHS means field name lookup in current context
+		fieldName := node.LHS.Value.(string)
+		left, err = e.evalNameString(fieldName, evalCtx)
+	} else {
+		// Normal evaluation of LHS
+		left, err = e.evalNode(ctx, node.LHS, evalCtx)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -324,22 +346,31 @@ func (e *Evaluator) evalDescendent(ctx context.Context, node *types.ASTNode, eva
 		switch v := data.(type) {
 		case map[string]interface{}:
 			for _, fieldValue := range v {
-				// Add this value to descendants
-				if fieldValue != nil {
+				// Skip nil values
+				if fieldValue == nil {
+					continue
+				}
+
+				// Don't add arrays as candidates - we'll add their elements when we recurse
+				// This prevents evalPath from traversing the array twice (once here, once in evalPath)
+				if _, isArray := fieldValue.([]interface{}); !isArray {
 					descendants = append(descendants, fieldValue)
 				}
-				// Recurse into this value
+
+				// Recurse into this value (arrays will have their elements added during recursion)
 				if err := collectDescendants(fieldValue); err != nil {
 					return err
 				}
 			}
 		case []interface{}:
+			// For arrays, add each item as a descendant (but not the array itself)
+			// and recurse into each item
 			for _, item := range v {
 				// Add this item to descendants
 				if item != nil {
 					descendants = append(descendants, item)
 				}
-				// Recurse into this item
+				// Recurse into this item to get its descendants
 				if err := collectDescendants(item); err != nil {
 					return err
 				}
