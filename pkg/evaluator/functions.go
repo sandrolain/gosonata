@@ -446,6 +446,11 @@ func fnAppend(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 }
 
 func fnReverse(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	// Handle undefined
+	if args[0] == nil {
+		return nil, nil
+	}
+
 	arr, err := e.toArray(args[0])
 	if err != nil {
 		return nil, err
@@ -706,6 +711,19 @@ func fnTrim(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inte
 }
 
 func fnContains(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	// Handle undefined
+	if args[0] == nil || args[1] == nil {
+		return nil, nil
+	}
+
+	// Type checking: both arguments must be strings
+	if _, ok := args[0].(string); !ok {
+		return nil, types.NewError("T0410", "Argument 1 of function 'contains' must be a string", -1)
+	}
+	if _, ok := args[1].(string); !ok {
+		return nil, types.NewError("T0410", "Argument 2 of function 'contains' must be a string", -1)
+	}
+
 	str := e.toString(args[0])
 	pattern := e.toString(args[1])
 	return strings.Contains(str, pattern), nil
@@ -1030,6 +1048,11 @@ func fnKeys(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inte
 		return []interface{}{}, nil
 	}
 
+	// Handle undefined
+	if args[0] == nil {
+		return nil, nil
+	}
+
 	arg := args[0]
 	result := make([]interface{}, 0)
 
@@ -1070,6 +1093,12 @@ func fnKeys(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inte
 	if len(result) == 0 {
 		return nil, nil
 	}
+
+	// Unwrap singleton arrays per JSONata semantics
+	if len(result) == 1 {
+		return result[0], nil
+	}
+
 	return result, nil
 }
 
