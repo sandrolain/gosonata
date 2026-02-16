@@ -1,0 +1,1367 @@
+# GoSonata API Reference
+
+**Version**: 0.1.0-dev
+**Last Updated**: February 16, 2026
+**Go Version**: 1.26.0+
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Top-Level Functions](#top-level-functions)
+- [Parser Package](#parser-package)
+- [Evaluator Package](#evaluator-package)
+- [Types Package](#types-package)
+- [Functions Package](#functions-package)
+- [Error Handling](#error-handling)
+- [Advanced Usage](#advanced-usage)
+- [Examples](#examples)
+
+---
+
+## Quick Start
+
+### Installation
+
+```bash
+go get github.com/sandrolain/gosonata
+```
+
+### Basic Usage
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/sandrolain/gosonata"
+)
+
+func main() {
+    // One-shot evaluation
+    data := map[string]interface{}{
+        "name": "John Doe",
+        "age": 30,
+    }
+
+    result, err := gosonata.Eval("$.name", data)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Println(result) // Output: John Doe
+}
+```
+
+### Compile and Reuse
+
+```go
+// Compile once, evaluate many times
+expr, err := gosonata.Compile("$.items[price > 100]")
+if err != nil {
+    log.Fatal(err)
+}
+
+ctx := context.Background()
+eval := evaluator.New()
+
+// Evaluate against multiple datasets
+result1, _ := eval.Eval(ctx, expr, data1)
+result2, _ := eval.Eval(ctx, expr, data2)
+```
+
+---
+
+## Top-Level Functions
+
+The `gosonata` package provides convenience functions for common use cases.
+
+### Compile
+
+```go
+func Compile(query string, opts ...parser.CompileOption) (*types.Expression, error)
+```
+
+Compiles a JSONata expression for repeated evaluation.
+
+**Parameters**:
+
+- `query`: JSONata expression string
+- `opts`: Optional compilation options
+
+**Returns**:
+
+- `*types.Expression`: Compiled expression ready for evaluation
+- `error`: Compilation error with position information
+
+**Example**:
+
+```go
+expr, err := gosonata.Compile("$.items[price > 100]")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### MustCompile
+
+```go
+func MustCompile(query string) *types.Expression
+```
+
+Like `Compile` but panics if compilation fails. Useful for static expressions.
+
+**Parameters**:
+
+- `query`: JSONata expression string
+
+**Returns**:
+
+- `*types.Expression`: Compiled expression
+
+**Panics**: If compilation fails
+
+**Example**:
+
+```go
+var itemsQuery = gosonata.MustCompile("$.items[price > 100]")
+
+func handler() {
+    result, err := eval.Eval(ctx, itemsQuery, data)
+    // ...
+}
+```
+
+### Eval
+
+```go
+func Eval(query string, data interface{}, opts ...evaluator.EvalOption) (interface{}, error)
+```
+
+One-shot evaluation: compiles and evaluates an expression in a single call.
+
+**Parameters**:
+
+- `query`: JSONata expression string
+- `data`: Input data (typically `map[string]interface{}` or `[]interface{}`)
+- `opts`: Optional evaluator options
+
+**Returns**:
+
+- `interface{}`: Result value (use type assertion)
+- `error`: Compilation or evaluation error
+
+**Note**: Creates a new evaluator and context with 30-second timeout. For better performance with repeated queries, use `Compile` + evaluator.
+
+**Example**:
+
+```go
+result, err := gosonata.Eval("$.name", data)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(result.(string))
+```
+
+### EvalWithContext
+
+```go
+func EvalWithContext(ctx context.Context, query string, data interface{}, opts ...evaluator.EvalOption) (interface{}, error)
+```
+
+Like `Eval` but with custom context for timeout and cancellation.
+
+**Parameters**:
+
+- `ctx`: Context for timeout and cancellation
+- `query`: JSONata expression string
+- `data`: Input data
+- `opts`: Optional evaluator options
+
+**Returns**:
+
+- `interface{}`: Result value
+- `error`: Compilation or evaluation error
+
+**Example**:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+result, err := gosonata.EvalWithContext(ctx, "$.items", data)
+```
+
+### Version
+
+```go
+func Version() string
+```
+
+Returns the current version of GoSonata.
+
+**Returns**:
+
+- `string`: Version string (e.g., "v0.1.0-dev")
+
+**Example**:
+
+```go
+fmt.Println("GoSonata version:", gosonata.Version())
+```
+
+---
+
+## Parser Package
+
+The `parser` package handles lexical analysis and parsing of JSONata expressions.
+
+### Parse
+
+```go
+func Parse(query string) (*types.Expression, error)
+```
+
+Parses a JSONata expression and returns the compiled Expression.
+
+**Parameters**:
+
+- `query`: JSONata expression string
+
+**Returns**:
+
+- `*types.Expression`: Compiled expression with AST
+- `error`: Parsing error with position information
+
+**Example**:
+
+```go
+import "github.com/sandrolain/gosonata/pkg/parser"
+
+expr, err := parser.Parse("$.items[0].name")
+if err != nil {
+    fmt.Printf("Parse error: %v\n", err)
+    return
+}
+```
+
+### Compile (Parser)
+
+```go
+func Compile(query string, opts ...CompileOption) (*types.Expression, error)
+```
+
+Alias for `Parse` with optional compile-time configuration.
+
+**Parameters**:
+
+- `query`: JSONata expression string
+- `opts`: Compilation options
+
+**Returns**:
+
+- `*types.Expression`: Compiled expression
+- `error`: Compilation error
+
+**Example**:
+
+```go
+expr, err := parser.Compile(query,
+    parser.WithRecovery(true),
+    parser.WithMaxDepth(200),
+)
+```
+
+### CompileOption
+
+#### WithRecovery
+
+```go
+func WithRecovery(enable bool) CompileOption
+```
+
+Enables error recovery mode for parsing invalid syntax.
+
+**Parameters**:
+
+- `enable`: Whether to enable recovery mode
+
+**Default**: `false`
+
+**Example**:
+
+```go
+expr, err := parser.Compile(query, parser.WithRecovery(true))
+// Partial AST may be available even with errors
+```
+
+#### WithMaxDepth
+
+```go
+func WithMaxDepth(depth int) CompileOption
+```
+
+Sets the maximum parsing depth to prevent stack overflow.
+
+**Parameters**:
+
+- `depth`: Maximum recursion depth
+
+**Default**: `100`
+
+**Example**:
+
+```go
+expr, err := parser.Compile(query, parser.WithMaxDepth(200))
+```
+
+### Lexer
+
+```go
+type Lexer struct {
+    // ... internal fields
+}
+
+func NewLexer(input string) *Lexer
+func (l *Lexer) Next(allowRegex bool) Token
+func (l *Lexer) Error() error
+```
+
+Low-level tokenizer. Typically not used directly; use `Parse` instead.
+
+**Example**:
+
+```go
+lexer := parser.NewLexer("$.name")
+for {
+    token := lexer.Next(false)
+    if token.Type == parser.TokenEOF {
+        break
+    }
+    fmt.Printf("%v: %v\n", token.Type, token.Value)
+}
+```
+
+---
+
+## Evaluator Package
+
+The `evaluator` package evaluates compiled expressions against data.
+
+### Evaluator
+
+```go
+type Evaluator struct {
+    // ... internal fields
+}
+
+func New(opts ...EvalOption) *Evaluator
+func (e *Evaluator) Eval(ctx context.Context, expr *types.Expression, data interface{}) (interface{}, error)
+```
+
+Main evaluation engine.
+
+**Example**:
+
+```go
+import "github.com/sandrolain/gosonata/pkg/evaluator"
+
+eval := evaluator.New(
+    evaluator.WithConcurrency(true),
+    evaluator.WithMaxDepth(100),
+)
+
+result, err := eval.Eval(ctx, expr, data)
+```
+
+### New
+
+```go
+func New(opts ...EvalOption) *Evaluator
+```
+
+Creates a new evaluator with optional configuration.
+
+**Parameters**:
+
+- `opts`: Evaluator options
+
+**Returns**:
+
+- `*Evaluator`: Configured evaluator instance
+
+**Default Configuration**:
+
+- Caching: disabled
+- Concurrency: enabled
+- MaxDepth: 100
+- Timeout: 30 seconds
+
+**Example**:
+
+```go
+eval := evaluator.New(
+    evaluator.WithCaching(true),
+    evaluator.WithTimeout(5*time.Second),
+    evaluator.WithDebug(true),
+)
+```
+
+### Eval (Evaluator)
+
+```go
+func (e *Evaluator) Eval(ctx context.Context, expr *types.Expression, data interface{}) (interface{}, error)
+```
+
+Evaluates a compiled expression against data.
+
+**Parameters**:
+
+- `ctx`: Context for timeout and cancellation
+- `expr`: Compiled expression
+- `data`: Input data
+
+**Returns**:
+
+- `interface{}`: Result value
+- `error`: Evaluation error
+
+**Example**:
+
+```go
+ctx := context.Background()
+result, err := eval.Eval(ctx, expr, data)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### EvalOption
+
+#### WithCaching
+
+```go
+func WithCaching(enabled bool) EvalOption
+```
+
+Enables result caching for repeated queries.
+
+**Parameters**:
+
+- `enabled`: Whether to enable caching
+
+**Default**: `false`
+
+**Note**: Currently not implemented; planned for Phase 7.
+
+**Example**:
+
+```go
+eval := evaluator.New(evaluator.WithCaching(true))
+```
+
+#### WithConcurrency
+
+```go
+func WithConcurrency(enabled bool) EvalOption
+```
+
+Enables concurrent evaluation of independent expressions.
+
+**Parameters**:
+
+- `enabled`: Whether to enable concurrency
+
+**Default**: `true`
+
+**Example**:
+
+```go
+eval := evaluator.New(evaluator.WithConcurrency(false))
+```
+
+#### WithMaxDepth
+
+```go
+func WithMaxDepth(depth int) EvalOption
+```
+
+Sets the maximum evaluation depth to prevent stack overflow.
+
+**Parameters**:
+
+- `depth`: Maximum recursion depth
+
+**Default**: `100`
+
+**Example**:
+
+```go
+eval := evaluator.New(evaluator.WithMaxDepth(200))
+```
+
+#### WithTimeout
+
+```go
+func WithTimeout(timeout time.Duration) EvalOption
+```
+
+Sets the evaluation timeout duration.
+
+**Parameters**:
+
+- `timeout`: Maximum evaluation time
+
+**Default**: `30 * time.Second`
+
+**Example**:
+
+```go
+eval := evaluator.New(evaluator.WithTimeout(5*time.Second))
+```
+
+#### WithDebug
+
+```go
+func WithDebug(enabled bool) EvalOption
+```
+
+Enables debug logging for evaluation steps.
+
+**Parameters**:
+
+- `enabled`: Whether to enable debug mode
+
+**Default**: `false`
+
+**Example**:
+
+```go
+eval := evaluator.New(evaluator.WithDebug(true))
+```
+
+#### WithLogger
+
+```go
+func WithLogger(logger *slog.Logger) EvalOption
+```
+
+Sets a custom structured logger.
+
+**Parameters**:
+
+- `logger`: Custom `log/slog` logger
+
+**Default**: `slog.Default()`
+
+**Example**:
+
+```go
+import "log/slog"
+
+logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+
+eval := evaluator.New(evaluator.WithLogger(logger))
+```
+
+### EvalContext
+
+```go
+type EvalContext struct {
+    // ... internal fields
+}
+
+func NewContext(data interface{}) *EvalContext
+func (c *EvalContext) NewChildContext(data interface{}) *EvalContext
+func (c *EvalContext) Data() interface{}
+func (c *EvalContext) SetBinding(name string, value interface{})
+func (c *EvalContext) GetBinding(name string) (interface{}, bool)
+```
+
+Evaluation context manages variable bindings and data scope.
+
+**Example**:
+
+```go
+ctx := evaluator.NewContext(data)
+ctx.SetBinding("myVar", 42)
+
+value, ok := ctx.GetBinding("myVar")
+if ok {
+    fmt.Println(value) // 42
+}
+```
+
+---
+
+## Types Package
+
+The `types` package defines core data structures.
+
+### Expression
+
+```go
+type Expression struct {
+    // ... internal fields
+}
+
+func (e *Expression) AST() *ASTNode
+func (e *Expression) Eval(ctx context.Context, data interface{}) (interface{}, error)
+```
+
+Represents a compiled JSONata expression.
+
+**Methods**:
+
+#### AST
+
+```go
+func (e *Expression) AST() *ASTNode
+```
+
+Returns the Abstract Syntax Tree of the expression.
+
+**Returns**:
+
+- `*ASTNode`: Root node of the AST
+
+**Example**:
+
+```go
+expr, _ := gosonata.Compile("$.name")
+ast := expr.AST()
+fmt.Println(ast.Type) // "path"
+```
+
+#### Eval
+
+```go
+func (e *Expression) Eval(ctx context.Context, data interface{}) (interface{}, error)
+```
+
+Convenience method to evaluate the expression with a new evaluator.
+
+**Parameters**:
+
+- `ctx`: Context for timeout and cancellation
+- `data`: Input data
+
+**Returns**:
+
+- `interface{}`: Result value
+- `error`: Evaluation error
+
+**Example**:
+
+```go
+expr, _ := gosonata.Compile("$.name")
+result, err := expr.Eval(context.Background(), data)
+```
+
+### ASTNode
+
+```go
+type ASTNode struct {
+    Type        NodeType
+    Value       interface{}
+    Position    int
+    LHS         *ASTNode
+    RHS         *ASTNode
+    Steps       []*ASTNode
+    Arguments   []*ASTNode
+    Expressions []*ASTNode
+    KeepArray   bool
+    ConsArray   bool
+    Stage       string
+    Index       int
+    IsGrouping  bool
+    Errors      []error
+}
+
+func NewASTNode(nodeType NodeType, position int) *ASTNode
+func (n *ASTNode) String() string
+```
+
+Represents a node in the Abstract Syntax Tree.
+
+**Fields**:
+
+- `Type`: Node type identifier (e.g., `NodePath`, `NodeBinary`)
+- `Value`: Literal value (for literals)
+- `Position`: Character position in source
+- `LHS`/`RHS`: Left/right operands (for binary operators)
+- `Steps`: Path steps (for path navigation)
+- `Arguments`: Function arguments
+- `Expressions`: Block expressions
+- `KeepArray`: Preserve array structure
+- `ConsArray`: Force array construction
+- `Stage`: Pipeline stage identifier
+- `IsGrouping`: Object constructor semantics
+
+**Example**:
+
+```go
+expr, _ := parser.Parse("$.items[0]")
+root := expr.AST()
+
+fmt.Println(root.Type)        // "path"
+fmt.Println(len(root.Steps))  // 2
+fmt.Println(root.Steps[0].Type) // "name" (for "items")
+```
+
+### NodeType
+
+```go
+type NodeType string
+
+const (
+    // Literals
+    NodeString  NodeType = "string"
+    NodeNumber  NodeType = "number"
+    NodeBoolean NodeType = "value"
+    NodeNull    NodeType = "value"
+
+    // Navigation
+    NodePath       NodeType = "path"
+    NodeName       NodeType = "name"
+    NodeWildcard   NodeType = "wildcard"
+    NodeDescendant NodeType = "descendant"
+    NodeParent     NodeType = "parent"
+
+    // Operators
+    NodeBinary NodeType = "binary"
+    NodeUnary  NodeType = "unary"
+
+    // Functions
+    NodeFunction NodeType = "function"
+    NodeLambda   NodeType = "lambda"
+    NodePartial  NodeType = "partial"
+
+    // ... and more
+)
+```
+
+Node type identifiers.
+
+### Error
+
+```go
+type Error struct {
+    Code     ErrorCode
+    Message  string
+    Position int
+    Token    string
+    Err      error
+}
+
+func NewError(code ErrorCode, message string, position int) *Error
+func (e *Error) Error() string
+func (e *Error) Unwrap() error
+func (e *Error) WithToken(token string) *Error
+func (e *Error) WithCause(err error) *Error
+```
+
+Structured JSONata error with code and position.
+
+**Example**:
+
+```go
+_, err := gosonata.Compile("$.name[")
+if err != nil {
+    if jsonataErr, ok := err.(*types.Error); ok {
+        fmt.Printf("Error %s at position %d: %s\n",
+            jsonataErr.Code,
+            jsonataErr.Position,
+            jsonataErr.Message)
+    }
+}
+```
+
+### ErrorCode
+
+```go
+type ErrorCode string
+
+const (
+    // S0xxx: Parser/Syntax errors
+    ErrStringNotClosed   ErrorCode = "S0101"
+    ErrSyntaxError       ErrorCode = "S0201"
+
+    // T0xxx: Type errors
+    ErrArgumentCountMismatch ErrorCode = "T0410"
+
+    // D0xxx: Evaluation errors
+    ErrInvokeNonFunction ErrorCode = "D1002"
+
+    // U0xxx: Runtime errors
+    ErrUndefinedVariable ErrorCode = "U1001"
+    ErrUndefinedFunction ErrorCode = "U1002"
+)
+```
+
+Standard JSONata error codes.
+
+### Null
+
+```go
+type Null struct{}
+
+var NullValue = Null{}
+
+func (Null) MarshalJSON() ([]byte, error)
+```
+
+Represents JSONata `null` (distinct from `undefined`/`nil`).
+
+**Example**:
+
+```go
+result, _ := gosonata.Eval("null", nil)
+if result == types.NullValue {
+    fmt.Println("Result is null")
+}
+```
+
+---
+
+## Functions Package
+
+The `functions` package manages built-in function registration and lookup.
+
+### FunctionRegistry
+
+```go
+type FunctionRegistry struct {
+    // ... internal fields
+}
+
+func NewRegistry() *FunctionRegistry
+func DefaultRegistry() *FunctionRegistry
+func (r *FunctionRegistry) Register(name string, fn BuiltinFunc, signature string)
+func (r *FunctionRegistry) Lookup(name string) (BuiltinFunc, bool)
+func (r *FunctionRegistry) Signature(name string) (string, bool)
+func (r *FunctionRegistry) List() []string
+```
+
+Manages built-in function registration and lookup.
+
+**Example**:
+
+```go
+import "github.com/sandrolain/gosonata/pkg/functions"
+
+registry := functions.DefaultRegistry()
+
+// Lookup a function
+fn, ok := registry.Lookup("$sum")
+if ok {
+    result, err := fn(ctx, []interface{}{1, 2, 3})
+}
+
+// List all functions
+names := registry.List()
+fmt.Println(names) // ["$sum", "$count", ...]
+```
+
+### BuiltinFunc
+
+```go
+type BuiltinFunc func(ctx context.Context, args ...interface{}) (interface{}, error)
+```
+
+Function signature for built-in functions.
+
+**Example**:
+
+```go
+func myCustomSum(ctx context.Context, args ...interface{}) (interface{}, error) {
+    arr, ok := args[0].([]interface{})
+    if !ok {
+        return nil, fmt.Errorf("expected array")
+    }
+
+    sum := 0.0
+    for _, v := range arr {
+        sum += v.(float64)
+    }
+    return sum, nil
+}
+
+registry.Register("$mySum", myCustomSum, "<a<n>>")
+```
+
+---
+
+## Error Handling
+
+### Error Types
+
+GoSonata uses structured errors with codes and positions.
+
+### Checking Error Types
+
+```go
+result, err := gosonata.Eval(query, data)
+if err != nil {
+    switch e := err.(type) {
+    case *types.Error:
+        // JSONata error with code and position
+        fmt.Printf("Error %s at position %d: %s\n",
+            e.Code, e.Position, e.Message)
+    default:
+        // Other error
+        fmt.Printf("Error: %v\n", err)
+    }
+}
+```
+
+### Error Categories
+
+| Category | Code Pattern | Description |
+|----------|--------------|-------------|
+| **Syntax** | `S0xxx` | Parsing and syntax errors |
+| **Type** | `T0xxx` | Type conversion and validation errors |
+| **Evaluation** | `D0xxx` | Runtime evaluation errors |
+| **Runtime** | `U0xxx` | Undefined variables/functions |
+
+### Common Error Codes
+
+| Code | Description |
+|------|-------------|
+| `S0101` | String literal not closed |
+| `S0102` | Number out of range |
+| `S0201` | Syntax error |
+| `S0202` | Expected token not found |
+| `T0410` | Function argument count mismatch |
+| `T1003` | Invalid type for operation |
+| `D1002` | Attempted to invoke non-function |
+| `U1001` | Undefined variable |
+| `U1002` | Undefined function |
+
+### Context Cancellation
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+result, err := gosonata.EvalWithContext(ctx, query, data)
+if err != nil {
+    if errors.Is(err, context.DeadlineExceeded) {
+        fmt.Println("Query timed out")
+    } else if errors.Is(err, context.Canceled) {
+        fmt.Println("Query was canceled")
+    }
+}
+```
+
+---
+
+## Advanced Usage
+
+### Custom Evaluator Configuration
+
+```go
+import (
+    "log/slog"
+    "os"
+    "time"
+)
+
+// Create custom logger
+logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+
+// Configure evaluator
+eval := evaluator.New(
+    evaluator.WithLogger(logger),
+    evaluator.WithDebug(true),
+    evaluator.WithMaxDepth(200),
+    evaluator.WithTimeout(10*time.Second),
+    evaluator.WithConcurrency(true),
+)
+
+// Use evaluator
+result, err := eval.Eval(ctx, expr, data)
+```
+
+### Working with Contexts
+
+```go
+// Create base context
+baseCtx := context.Background()
+
+// Add timeout
+ctx, cancel := context.WithTimeout(baseCtx, 5*time.Second)
+defer cancel()
+
+// Add custom values
+ctx = context.WithValue(ctx, "requestID", "12345")
+
+// Evaluate
+result, err := eval.Eval(ctx, expr, data)
+```
+
+### Type Assertions
+
+```go
+result, err := gosonata.Eval(query, data)
+if err != nil {
+    log.Fatal(err)
+}
+
+switch v := result.(type) {
+case string:
+    fmt.Printf("String: %s\n", v)
+case float64:
+    fmt.Printf("Number: %f\n", v)
+case bool:
+    fmt.Printf("Boolean: %t\n", v)
+case []interface{}:
+    fmt.Printf("Array with %d items\n", len(v))
+case map[string]interface{}:
+    fmt.Printf("Object with %d keys\n", len(v))
+case nil:
+    fmt.Println("Undefined")
+case types.Null:
+    fmt.Println("Null")
+default:
+    fmt.Printf("Unknown type: %T\n", v)
+}
+```
+
+### Handling Arrays and Objects
+
+```go
+// Array result
+result, _ := gosonata.Eval("$.items", data)
+if arr, ok := result.([]interface{}); ok {
+    for i, item := range arr {
+        fmt.Printf("Item %d: %v\n", i, item)
+    }
+}
+
+// Object result
+result, _ := gosonata.Eval("$.user", data)
+if obj, ok := result.(map[string]interface{}); ok {
+    for key, value := range obj {
+        fmt.Printf("%s: %v\n", key, value)
+    }
+}
+```
+
+### Error Recovery
+
+```go
+// Parse with error recovery enabled
+expr, err := parser.Compile(query, parser.WithRecovery(true))
+if err != nil {
+    // Check for partial AST
+    if expr != nil && expr.AST() != nil {
+        fmt.Println("Partial AST available despite errors")
+        // Can inspect or process partial AST
+    }
+}
+```
+
+---
+
+## Examples
+
+### Example 1: Simple Path Navigation
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    "github.com/sandrolain/gosonata"
+)
+
+func main() {
+    data := map[string]interface{}{
+        "user": map[string]interface{}{
+            "name": "Alice",
+            "age":  28,
+        },
+    }
+
+    result, err := gosonata.Eval("$.user.name", data)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Println(result) // Output: Alice
+}
+```
+
+### Example 2: Array Filtering
+
+```go
+data := map[string]interface{}{
+    "items": []interface{}{
+        map[string]interface{}{"name": "Item 1", "price": 50},
+        map[string]interface{}{"name": "Item 2", "price": 150},
+        map[string]interface{}{"name": "Item 3", "price": 200},
+    },
+}
+
+query := "$.items[price > 100]"
+result, err := gosonata.Eval(query, data)
+if err != nil {
+    log.Fatal(err)
+}
+
+items := result.([]interface{})
+fmt.Printf("Found %d items over $100\n", len(items))
+// Output: Found 2 items over $100
+```
+
+### Example 3: Aggregation
+
+```go
+data := map[string]interface{}{
+    "numbers": []interface{}{1, 2, 3, 4, 5},
+}
+
+// Sum array
+result, _ := gosonata.Eval("$sum($.numbers)", data)
+fmt.Println(result) // Output: 15
+
+// Count items
+result, _ = gosonata.Eval("$count($.numbers)", data)
+fmt.Println(result) // Output: 5
+
+// Average
+result, _ = gosonata.Eval("$average($.numbers)", data)
+fmt.Println(result) // Output: 3
+```
+
+### Example 4: Reusable Expression
+
+```go
+// Compile once
+expr := gosonata.MustCompile("$.items[price > $threshold]")
+eval := evaluator.New()
+ctx := context.Background()
+
+// Create evaluation context with variable
+evalCtx := evaluator.NewContext(data1)
+evalCtx.SetBinding("threshold", 100.0)
+
+// Evaluate multiple times
+result1, _ := eval.Eval(ctx, expr, data1)
+result2, _ := eval.Eval(ctx, expr, data2)
+result3, _ := eval.Eval(ctx, expr, data3)
+```
+
+### Example 5: Timeout Handling
+
+```go
+import (
+    "context"
+    "time"
+)
+
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+defer cancel()
+
+result, err := gosonata.EvalWithContext(ctx, complexQuery, largeData)
+if err != nil {
+    if errors.Is(err, context.DeadlineExceeded) {
+        fmt.Println("Query timed out after 2 seconds")
+        return
+    }
+    log.Fatal(err)
+}
+```
+
+### Example 6: Debug Mode
+
+```go
+import "log/slog"
+
+logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+
+eval := evaluator.New(
+    evaluator.WithLogger(logger),
+    evaluator.WithDebug(true),
+)
+
+// Evaluation will log detailed steps
+result, err := eval.Eval(ctx, expr, data)
+```
+
+### Example 7: Object Construction
+
+```go
+data := map[string]interface{}{
+    "firstName": "John",
+    "lastName":  "Doe",
+    "age":       30,
+}
+
+query := `{
+    "fullName": $.firstName & " " & $.lastName,
+    "adult": $.age >= 18
+}`
+
+result, err := gosonata.Eval(query, data)
+// Output: {"fullName": "John Doe", "adult": true}
+```
+
+### Example 8: Higher-Order Functions
+
+```go
+data := map[string]interface{}{
+    "numbers": []interface{}{1, 2, 3, 4, 5},
+}
+
+// Map
+result, _ := gosonata.Eval("$map($.numbers, function($v) { $v * 2 })", data)
+// Output: [2, 4, 6, 8, 10]
+
+// Filter
+result, _ = gosonata.Eval("$filter($.numbers, function($v) { $v > 2 })", data)
+// Output: [3, 4, 5]
+
+// Reduce
+result, _ = gosonata.Eval("$reduce($.numbers, function($acc, $v) { $acc + $v }, 0)", data)
+// Output: 15
+```
+
+---
+
+## Performance Tips
+
+### 1. Compile Once, Evaluate Many
+
+```go
+// ❌ Bad: Compile every time
+for _, data := range datasets {
+    result, _ := gosonata.Eval(query, data)
+}
+
+// ✅ Good: Compile once
+expr := gosonata.MustCompile(query)
+eval := evaluator.New()
+for _, data := range datasets {
+    result, _ := eval.Eval(ctx, expr, data)
+}
+```
+
+### 2. Reuse Evaluator
+
+```go
+// ✅ Good: Reuse evaluator instance
+eval := evaluator.New()
+for _, query := range queries {
+    expr, _ := gosonata.Compile(query)
+    result, _ := eval.Eval(ctx, expr, data)
+}
+```
+
+### 3. Use Context Timeout
+
+```go
+// Set reasonable timeout
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+result, err := eval.Eval(ctx, expr, data)
+```
+
+### 4. Enable Concurrency
+
+```go
+// Default is enabled; only disable if needed
+eval := evaluator.New(evaluator.WithConcurrency(true))
+```
+
+---
+
+## Migration Guide
+
+### From JavaScript JSONata
+
+```javascript
+// JavaScript
+const jsonata = require('jsonata');
+const expression = jsonata('$.name');
+const result = expression.evaluate(data);
+```
+
+```go
+// Go
+import "github.com/sandrolain/gosonata"
+
+expr, _ := gosonata.Compile("$.name")
+result, _ := expr.Eval(context.Background(), data)
+```
+
+### From go-jsonata v206
+
+```go
+// Old (go-jsonata)
+import "github.com/blues/jsonata-go"
+
+e := jsonata.MustCompile(query)
+result, _ := e.Eval(data)
+```
+
+```go
+// New (GoSonata)
+import "github.com/sandrolain/gosonata"
+
+expr := gosonata.MustCompile(query)
+eval := evaluator.New()
+result, _ := eval.Eval(context.Background(), expr, data)
+```
+
+---
+
+## API Stability
+
+### Current Status (v0.1.0-dev)
+
+⚠️ **Beta API**: Subject to change before v1.0.0
+
+### Stable APIs
+
+- Top-level functions (`Compile`, `Eval`, `MustCompile`)
+- Parser API (`Parse`, `Compile`)
+- Basic evaluator (`New`, `Eval`)
+- Core types (`Expression`, `ASTNode`, `Error`)
+
+### Experimental APIs
+
+- Caching options (not yet implemented)
+- Advanced concurrency features
+- Custom function registration (planned)
+
+### Planned Changes
+
+- Streaming API (`EvalStream`)
+- Plugin system
+- Advanced caching controls
+
+---
+
+## References
+
+- [Architecture Documentation](ARCHITECTURE.md)
+- [Differences from Other Implementations](DIFFERENCES.md)
+- [JSONata Official Documentation](https://docs.jsonata.org/)
+- [GitHub Repository](https://github.com/sandrolain/gosonata)
+
+---
+
+**Document Maintenance**: This document should be updated with each public API change. See [GitHub Copilot Instructions](../.github/copilot-instructions.md) for update procedures.
