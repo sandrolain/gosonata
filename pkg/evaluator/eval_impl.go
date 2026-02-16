@@ -384,6 +384,9 @@ func (e *Evaluator) evalDescendent(ctx context.Context, node *types.ASTNode, eva
 		}
 	}
 
+	// Deduplicate results before returning
+	results = deduplicateResults(results)
+
 	// Return nil if no results found
 	if len(results) == 0 {
 		return nil, nil
@@ -395,6 +398,112 @@ func (e *Evaluator) evalDescendent(ctx context.Context, node *types.ASTNode, eva
 	}
 
 	return results, nil
+}
+
+// deduplicateResults removes duplicate values from a slice while preserving order.
+// Uses deep equality comparison for complex types (maps, slices).
+// Note: Only deduplicates objects and arrays, not primitive values (numbers, strings, bools).
+func deduplicateResults(results []interface{}) []interface{} {
+	if len(results) <= 1 {
+		return results
+	}
+
+	seen := make([]interface{}, 0, len(results))
+	for _, item := range results {
+		// Only deduplicate complex types (maps and slices)
+		// Primitive values (numbers, strings, bools) can repeat
+		if !isComplexType(item) {
+			seen = append(seen, item)
+			continue
+		}
+
+		duplicate := false
+		for _, seenItem := range seen {
+			if deepEqual(item, seenItem) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			seen = append(seen, item)
+		}
+	}
+	return seen
+}
+
+// isComplexType returns true if the value is a map or slice (complex types that should be deduplicated).
+func isComplexType(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	val := reflect.ValueOf(v)
+	kind := val.Kind()
+	return kind == reflect.Map || kind == reflect.Slice || kind == reflect.Array
+}
+
+// deepEqual performs deep equality comparison between two values.
+// Handles maps, slices, and primitive types.
+func deepEqual(a, b interface{}) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Use reflection for all comparisons
+	aVal := reflect.ValueOf(a)
+	bVal := reflect.ValueOf(b)
+
+	// Different types are not equal
+	if aVal.Type() != bVal.Type() {
+		return false
+	}
+
+	switch aVal.Kind() {
+	case reflect.Map:
+		if aVal.Len() != bVal.Len() {
+			return false
+		}
+		for _, key := range aVal.MapKeys() {
+			aElem := aVal.MapIndex(key)
+			bElem := bVal.MapIndex(key)
+			if !bElem.IsValid() || !deepEqual(aElem.Interface(), bElem.Interface()) {
+				return false
+			}
+		}
+		return true
+
+	case reflect.Slice, reflect.Array:
+		if aVal.Len() != bVal.Len() {
+			return false
+		}
+		for i := 0; i < aVal.Len(); i++ {
+			if !deepEqual(aVal.Index(i).Interface(), bVal.Index(i).Interface()) {
+				return false
+			}
+		}
+		return true
+
+	case reflect.String:
+		return aVal.String() == bVal.String()
+
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return aVal.Int() == bVal.Int()
+
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return aVal.Uint() == bVal.Uint()
+
+	case reflect.Float32, reflect.Float64:
+		return aVal.Float() == bVal.Float()
+
+	case reflect.Bool:
+		return aVal.Bool() == bVal.Bool()
+
+	default:
+		// For other types, use DeepEqual from reflect package
+		return reflect.DeepEqual(a, b)
+	}
 }
 
 // evalWildcard evaluates a wildcard expression (*).
