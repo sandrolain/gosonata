@@ -54,6 +54,10 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 		return e.evalVariable(node, evalCtx)
 	case types.NodePath:
 		return e.evalPath(ctx, node, evalCtx)
+	case types.NodeDescendant:
+		return e.evalDescendent(ctx, node, evalCtx)
+	case types.NodeWildcard:
+		return e.evalWildcard(ctx, node, evalCtx)
 	case types.NodeBinary:
 		return e.evalBinary(ctx, node, evalCtx)
 	case types.NodeUnary:
@@ -280,6 +284,174 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 
 	// Evaluate right side in new context
 	return e.evalNode(ctx, node.RHS, pathCtx)
+}
+
+// evalDescendent evaluates a descendent expression (recursive field search).
+// The descendent operator ** returns ALL descendants, then RHS is applied as a path to each.
+func (e *Evaluator) evalDescendent(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	// Evaluate left side
+	left, err := e.evalNode(ctx, node.LHS, evalCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	// If left is nil, return nil
+	if left == nil {
+		return nil, nil
+	}
+
+	// Check if we should keep singleton arrays
+	keepArray := node.KeepArray || hasKeepArrayInChain(node.LHS)
+
+	// Collect ALL descendants (not just matching ones)
+	var descendants []interface{}
+
+	// Helper function to recursively collect ALL descendant values
+	var collectDescendants func(data interface{}) error
+	collectDescendants = func(data interface{}) error {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		if data == nil {
+			return nil
+		}
+
+		// Recursively collect from nested structures
+		switch v := data.(type) {
+		case map[string]interface{}:
+			for _, fieldValue := range v {
+				// Add this value to descendants
+				if fieldValue != nil {
+					descendants = append(descendants, fieldValue)
+				}
+				// Recurse into this value
+				if err := collectDescendants(fieldValue); err != nil {
+					return err
+				}
+			}
+		case []interface{}:
+			for _, item := range v {
+				// Add this item to descendants
+				if item != nil {
+					descendants = append(descendants, item)
+				}
+				// Recurse into this item
+				if err := collectDescendants(item); err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	}
+
+	// Start collecting all descendants from left
+	// Also evaluate RHS on left itself (not just descendants)
+	if err := collectDescendants(left); err != nil {
+		return nil, err
+	}
+
+	// Add left itself as first candidate for RHS evaluation
+	allCandidates := append([]interface{}{left}, descendants...)
+
+	// Now apply RHS as a path to each candidate (including left)
+	var results []interface{}
+	for _, candidate := range allCandidates {
+		// Create context with candidate as data
+		candCtx := evalCtx.NewChildContext(candidate)
+
+		// Evaluate RHS in candidate context
+		var value interface{}
+		if node.RHS.Type == types.NodeString {
+			value, err = e.evalNameString(node.RHS.Value.(string), candCtx)
+		} else if node.RHS.Type == types.NodeName {
+			value, err = e.evalName(node.RHS, candCtx)
+		} else {
+			value, err = e.evalNode(ctx, node.RHS, candCtx)
+		}
+
+		// Add non-nil results
+		if err == nil && value != nil {
+			if arr, ok := value.([]interface{}); ok {
+				results = append(results, arr...)
+			} else {
+				results = append(results, value)
+			}
+		}
+	}
+
+	// Return nil if no results found
+	if len(results) == 0 {
+		return nil, nil
+	}
+
+	// Unwrap singleton arrays unless keepArray is set
+	if len(results) == 1 && !keepArray {
+		return results[0], nil
+	}
+
+	return results, nil
+}
+
+// evalWildcard evaluates a wildcard expression (*).
+// Returns all values from an object or all elements from an array.
+func (e *Evaluator) evalWildcard(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	// Get current context data
+	data := evalCtx.Data()
+
+	if data == nil {
+		return nil, nil
+	}
+
+	var results []interface{}
+
+	switch v := data.(type) {
+	case map[string]interface{}:
+		// For objects, return all values
+		for _, value := range v {
+			if value != nil {
+				// Flatten arrays
+				if arr, ok := value.([]interface{}); ok {
+					results = append(results, arr...)
+				} else {
+					results = append(results, value)
+				}
+			}
+		}
+	case []interface{}:
+		// For arrays, flatten and return all elements
+		for _, item := range v {
+			if item != nil {
+				if arr, ok := item.([]interface{}); ok {
+					results = append(results, arr...)
+				} else {
+					results = append(results, item)
+				}
+			}
+		}
+	default:
+		// For other types, return the value itself
+		return data, nil
+	}
+
+	// Return nil if no results
+	if len(results) == 0 {
+		return nil, nil
+	}
+
+	// Check if we should keep singleton arrays
+	keepArray := node.KeepArray
+
+	// Unwrap singleton arrays unless keepArray is set
+	if len(results) == 1 && !keepArray {
+		return results[0], nil
+	}
+
+	return results, nil
 }
 
 // hasKeepArrayInChain recursively checks if any node in the LHS chain has KeepArray set.

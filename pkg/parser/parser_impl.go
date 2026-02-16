@@ -87,6 +87,7 @@ var precedence = map[TokenType]int{
 	TokenCondition:    15, // ?
 	TokenSort:         70, // ^ (sort operator)
 	TokenDot:          75, // .
+	TokenDescendent:   75, // ** (descendant operator, same as dot)
 	TokenBracketOpen:  80, // [
 	TokenBraceOpen:    80, // {
 	TokenParenOpen:    80, // (
@@ -198,6 +199,12 @@ func (p *Parser) parsePrefix() (*types.ASTNode, error) {
 		return p.parseArrayConstructor()
 	case TokenBraceOpen:
 		return p.parseObjectConstructor()
+	case TokenDescendent:
+		// ** in prefix position means descendent from current context ($.**)
+		return p.parseDescendentPrefix()
+	case TokenMult:
+		// * in prefix position means wildcard (all fields/values)
+		return p.parseWildcard()
 	case TokenAnd, TokenOr, TokenIn:
 		// Keywords can also be used as field names (e.g., 'and', 'or', 'in')
 		// Treat them as names when in prefix position
@@ -215,6 +222,8 @@ func (p *Parser) parseInfix(left *types.ASTNode) (*types.ASTNode, error) {
 	switch token.Type {
 	case TokenDot:
 		return p.parsePath(left)
+	case TokenDescendent:
+		return p.parseDescendent(left)
 	case TokenBracketOpen:
 		return p.parseFilter(left)
 	case TokenBraceOpen:
@@ -543,6 +552,88 @@ func (p *Parser) parsePath(left *types.ASTNode) (*types.ASTNode, error) {
 		node.KeepArray = true
 	}
 
+	return node, nil
+}
+
+// parseDescendent parses a descendent expression (recursive field navigation).
+func (p *Parser) parseDescendent(left *types.ASTNode) (*types.ASTNode, error) {
+	pos := p.current.Position
+	p.advance() // Skip '**'
+
+	// Skip optional '.' after '**' (e.g., foo.**.blah is same as foo.**blah)
+	if p.current.Type == TokenDot {
+		p.advance()
+	}
+
+	// Parse the right-hand side
+	right, err := p.parseExpression(precedence[TokenDescendent])
+	if err != nil {
+		return nil, err
+	}
+
+	node := types.NewASTNode(types.NodeDescendant, pos)
+	node.LHS = left
+	node.RHS = right
+
+	// Propagate KeepArray flag from left side
+	if left.KeepArray {
+		node.KeepArray = true
+	}
+
+	return node, nil
+}
+
+// parseDescendentPrefix parses a descendent operator in prefix position.
+// ** in prefix means search all descendants of the current context.
+func (p *Parser) parseDescendentPrefix() (*types.ASTNode, error) {
+	pos := p.current.Position
+	p.advance() // Skip '**'
+
+	// Skip optional '.' after '**' (e.g., **.blah is same as **blah)
+	if p.current.Type == TokenDot {
+		p.advance()
+	}
+
+	// Create implicit current context reference ($)
+	left := types.NewASTNode(types.NodeVariable, pos)
+	left.Value = ""
+
+	// If there's a right-hand side, parse it
+	var right *types.ASTNode
+	var err error
+
+	// Check if the next token can be part of the path
+	if p.current.Type != TokenEOF &&
+		p.current.Type != TokenSemicolon &&
+		p.current.Type != TokenParenClose &&
+		p.current.Type != TokenBracketClose &&
+		p.current.Type != TokenBraceClose &&
+		p.current.Type != TokenComma {
+		// Parse the right-hand side with descendent precedence
+		right, err = p.parseExpression(precedence[TokenDescendent])
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Just ** means all descendants (wildcard)
+		right = types.NewASTNode(types.NodeName, pos)
+		right.Value = "*"
+	}
+
+	node := types.NewASTNode(types.NodeDescendant, pos)
+	node.LHS = left
+	node.RHS = right
+
+	return node, nil
+}
+
+// parseWildcard parses a wildcard operator (*).
+// The wildcard returns all values in an object or all elements in an array.
+func (p *Parser) parseWildcard() (*types.ASTNode, error) {
+	pos := p.current.Position
+	p.advance() // Skip '*'
+
+	node := types.NewASTNode(types.NodeWildcard, pos)
 	return node, nil
 }
 
