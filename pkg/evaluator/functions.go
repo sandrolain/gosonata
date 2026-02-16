@@ -21,10 +21,11 @@ import (
 
 // FunctionDef defines a built-in function.
 type FunctionDef struct {
-	Name    string
-	MinArgs int
-	MaxArgs int // -1 for unlimited
-	Impl    FunctionImpl
+	Name           string
+	MinArgs        int
+	MaxArgs        int  // -1 for unlimited
+	AcceptsContext bool // If true, pass context value as first arg when called with no args
+	Impl           FunctionImpl
 }
 
 // FunctionImpl is the implementation of a function.
@@ -101,32 +102,32 @@ func initBuiltinFunctions() {
 			"zip":      {Name: "zip", MinArgs: 1, MaxArgs: -1, Impl: fnZip},
 
 			// String functions
-			"string":          {Name: "string", MinArgs: 0, MaxArgs: 2, Impl: fnString},
+			"string":          {Name: "string", MinArgs: 0, MaxArgs: 2, AcceptsContext: true, Impl: fnString},
 			"length":          {Name: "length", MinArgs: 1, MaxArgs: 1, Impl: fnLength},
 			"substring":       {Name: "substring", MinArgs: 2, MaxArgs: 3, Impl: fnSubstring},
-			"uppercase":       {Name: "uppercase", MinArgs: 1, MaxArgs: 1, Impl: fnUppercase},
-			"lowercase":       {Name: "lowercase", MinArgs: 1, MaxArgs: 1, Impl: fnLowercase},
-			"trim":            {Name: "trim", MinArgs: 1, MaxArgs: 1, Impl: fnTrim},
+			"uppercase":       {Name: "uppercase", MinArgs: 1, MaxArgs: 1, AcceptsContext: true, Impl: fnUppercase},
+			"lowercase":       {Name: "lowercase", MinArgs: 1, MaxArgs: 1, AcceptsContext: true, Impl: fnLowercase},
+			"trim":            {Name: "trim", MinArgs: 0, MaxArgs: 1, AcceptsContext: true, Impl: fnTrim},
 			"contains":        {Name: "contains", MinArgs: 2, MaxArgs: 2, Impl: fnContains},
 			"split":           {Name: "split", MinArgs: 2, MaxArgs: 3, Impl: fnSplit},
 			"join":            {Name: "join", MinArgs: 1, MaxArgs: 2, Impl: fnJoin},
 			"pad":             {Name: "pad", MinArgs: 2, MaxArgs: 3, Impl: fnPad},
-			"substringBefore": {Name: "substringBefore", MinArgs: 2, MaxArgs: 2, Impl: fnSubstringBefore},
-			"substringAfter":  {Name: "substringAfter", MinArgs: 2, MaxArgs: 2, Impl: fnSubstringAfter},
+			"substringBefore": {Name: "substringBefore", MinArgs: 2, MaxArgs: 2, AcceptsContext: true, Impl: fnSubstringBefore},
+			"substringAfter":  {Name: "substringAfter", MinArgs: 2, MaxArgs: 2, AcceptsContext: true, Impl: fnSubstringAfter},
 
 			// Type functions
-			"type":    {Name: "type", MinArgs: 1, MaxArgs: 1, Impl: fnType},
+			"type":    {Name: "type", MinArgs: 1, MaxArgs: 1, AcceptsContext: true, Impl: fnType},
 			"exists":  {Name: "exists", MinArgs: 1, MaxArgs: 1, Impl: fnExists},
-			"number":  {Name: "number", MinArgs: 1, MaxArgs: 1, Impl: fnNumber},
-			"boolean": {Name: "boolean", MinArgs: 1, MaxArgs: 1, Impl: fnBoolean},
+			"number":  {Name: "number", MinArgs: 1, MaxArgs: 1, AcceptsContext: true, Impl: fnNumber},
+			"boolean": {Name: "boolean", MinArgs: 1, MaxArgs: 1, AcceptsContext: true, Impl: fnBoolean},
 			"not":     {Name: "not", MinArgs: 1, MaxArgs: 1, Impl: fnNot},
 
 			// Math functions
-			"abs":    {Name: "abs", MinArgs: 1, MaxArgs: 1, Impl: fnAbs},
-			"floor":  {Name: "floor", MinArgs: 1, MaxArgs: 1, Impl: fnFloor},
-			"ceil":   {Name: "ceil", MinArgs: 1, MaxArgs: 1, Impl: fnCeil},
-			"round":  {Name: "round", MinArgs: 1, MaxArgs: 2, Impl: fnRound},
-			"sqrt":   {Name: "sqrt", MinArgs: 1, MaxArgs: 1, Impl: fnSqrt},
+			"abs":    {Name: "abs", MinArgs: 1, MaxArgs: 1, AcceptsContext: true, Impl: fnAbs},
+			"floor":  {Name: "floor", MinArgs: 1, MaxArgs: 1, AcceptsContext: true, Impl: fnFloor},
+			"ceil":   {Name: "ceil", MinArgs: 1, MaxArgs: 1, AcceptsContext: true, Impl: fnCeil},
+			"round":  {Name: "round", MinArgs: 1, MaxArgs: 2, AcceptsContext: true, Impl: fnRound},
+			"sqrt":   {Name: "sqrt", MinArgs: 1, MaxArgs: 1, AcceptsContext: true, Impl: fnSqrt},
 			"power":  {Name: "power", MinArgs: 2, MaxArgs: 2, Impl: fnPower},
 			"random": {Name: "random", MinArgs: 0, MaxArgs: 0, Impl: fnRandom},
 
@@ -727,8 +728,17 @@ func fnLowercase(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args [
 }
 
 func fnTrim(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	// Handle no arguments
+	if len(args) == 0 || args[0] == nil {
+		return nil, nil
+	}
+
 	str := e.toString(args[0])
-	return strings.TrimSpace(str), nil
+	// Trim leading/trailing whitespace
+	str = strings.TrimSpace(str)
+	// Normalize internal whitespace (collapse multiple spaces to single)
+	str = regexp.MustCompile(`\s+`).ReplaceAllString(str, " ")
+	return str, nil
 }
 
 func fnContains(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
@@ -1749,6 +1759,16 @@ func fnEncodeUrlComponent(ctx context.Context, e *Evaluator, evalCtx *EvalContex
 	}
 
 	str := e.toString(args[0])
+
+	// Check for lone surrogates (invalid UTF-16)
+	for _, r := range str {
+		// High surrogate: U+D800 - U+DBFF
+		// Low surrogate: U+DC00 - U+DFFF
+		if r >= 0xD800 && r <= 0xDFFF {
+			return nil, types.NewError("D3140", fmt.Sprintf("The argument of function encodeUrlComponent contains an unpaired surrogate: %q", str), -1)
+		}
+	}
+
 	return url.QueryEscape(str), nil
 }
 
@@ -2124,41 +2144,40 @@ func fnZip(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inter
 		return []interface{}{}, nil
 	}
 
-	// Handle undefined
-	if args[0] == nil {
-		return nil, nil
+	// If any argument is undefined, return empty array
+	for _, arg := range args {
+		if arg == nil {
+			return []interface{}{}, nil
+		}
 	}
 
 	// Convert all args to arrays
 	arrays := make([][]interface{}, len(args))
-	maxLen := 0
+	minLen := -1
 
 	for i, arg := range args {
-		if arg == nil {
-			arrays[i] = []interface{}{}
-			continue
-		}
-
 		arr, err := e.toArray(arg)
 		if err != nil {
 			return nil, err
 		}
 		arrays[i] = arr
-		if len(arr) > maxLen {
-			maxLen = len(arr)
+		// Track minimum length
+		if minLen == -1 || len(arr) < minLen {
+			minLen = len(arr)
 		}
 	}
 
-	// Zip arrays together
-	result := make([]interface{}, maxLen)
-	for i := 0; i < maxLen; i++ {
+	// If any array is empty, return empty array
+	if minLen == 0 {
+		return []interface{}{}, nil
+	}
+
+	// Zip arrays together, stopping at shortest array length
+	result := make([]interface{}, minLen)
+	for i := 0; i < minLen; i++ {
 		tuple := make([]interface{}, len(arrays))
 		for j, arr := range arrays {
-			if i < len(arr) {
-				tuple[j] = arr[i]
-			} else {
-				tuple[j] = nil
-			}
+			tuple[j] = arr[i]
 		}
 		result[i] = tuple
 	}

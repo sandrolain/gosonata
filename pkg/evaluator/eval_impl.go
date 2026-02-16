@@ -1025,6 +1025,12 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 		args = append(args, arg)
 	}
 
+	// If function accepts context and we have fewer args than required, prepend context
+	if fnDef.AcceptsContext && len(args) < fnDef.MinArgs {
+		contextData := evalCtx.Data()
+		args = append([]interface{}{contextData}, args...)
+	}
+
 	// Validate argument count
 	if len(args) < fnDef.MinArgs {
 		return nil, types.NewError(types.ErrArgumentCountMismatch,
@@ -1550,6 +1556,10 @@ func (e *Evaluator) cleanFloatingPointArtifacts(str string, rounded float64) str
 // Arithmetic operators
 
 func (e *Evaluator) opAdd(left, right interface{}) (interface{}, error) {
+	// Propagate undefined
+	if left == nil || right == nil {
+		return nil, nil
+	}
 	l, err := e.toNumber(left)
 	if err != nil {
 		return nil, err
@@ -1562,6 +1572,10 @@ func (e *Evaluator) opAdd(left, right interface{}) (interface{}, error) {
 }
 
 func (e *Evaluator) opSubtract(left, right interface{}) (interface{}, error) {
+	// Propagate undefined
+	if left == nil || right == nil {
+		return nil, nil
+	}
 	l, err := e.toNumber(left)
 	if err != nil {
 		return nil, err
@@ -1574,6 +1588,10 @@ func (e *Evaluator) opSubtract(left, right interface{}) (interface{}, error) {
 }
 
 func (e *Evaluator) opMultiply(left, right interface{}) (interface{}, error) {
+	// Propagate undefined
+	if left == nil || right == nil {
+		return nil, nil
+	}
 	l, err := e.toNumber(left)
 	if err != nil {
 		return nil, err
@@ -1586,6 +1604,10 @@ func (e *Evaluator) opMultiply(left, right interface{}) (interface{}, error) {
 }
 
 func (e *Evaluator) opDivide(left, right interface{}) (interface{}, error) {
+	// Propagate undefined
+	if left == nil || right == nil {
+		return nil, nil
+	}
 	l, err := e.toNumber(left)
 	if err != nil {
 		return nil, err
@@ -1602,6 +1624,10 @@ func (e *Evaluator) opDivide(left, right interface{}) (interface{}, error) {
 }
 
 func (e *Evaluator) opModulo(left, right interface{}) (interface{}, error) {
+	// Propagate undefined
+	if left == nil || right == nil {
+		return nil, nil
+	}
 	l, err := e.toNumber(left)
 	if err != nil {
 		return nil, err
@@ -1617,6 +1643,10 @@ func (e *Evaluator) opModulo(left, right interface{}) (interface{}, error) {
 }
 
 func (e *Evaluator) opNegate(operand interface{}) (interface{}, error) {
+	// Propagate undefined
+	if operand == nil {
+		return nil, nil
+	}
 	n, err := e.toNumber(operand)
 	if err != nil {
 		return nil, err
