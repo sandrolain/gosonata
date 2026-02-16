@@ -150,8 +150,8 @@ func initBuiltinFunctions() {
 			"toMillis":   {Name: "toMillis", MinArgs: 1, MaxArgs: 2, Impl: fnToMillis},
 
 			// Encoding functions
-			"base64encode":       {Name: "base64encode", MinArgs: 1, MaxArgs: 1, Impl: fnBase64Encode},
-			"base64decode":       {Name: "base64decode", MinArgs: 1, MaxArgs: 1, Impl: fnBase64Decode},
+			"base64encode":       {Name: "base64encode", MinArgs: 0, MaxArgs: 1, Impl: fnBase64Encode},
+			"base64decode":       {Name: "base64decode", MinArgs: 0, MaxArgs: 1, Impl: fnBase64Decode},
 			"encodeUrl":          {Name: "encodeUrl", MinArgs: 1, MaxArgs: 1, Impl: fnEncodeUrl},
 			"decodeUrl":          {Name: "decodeUrl", MinArgs: 1, MaxArgs: 1, Impl: fnDecodeUrl},
 			"encodeUrlComponent": {Name: "encodeUrlComponent", MinArgs: 1, MaxArgs: 1, Impl: fnEncodeUrlComponent},
@@ -1684,7 +1684,7 @@ func parseTimestampWithPicture(timestamp, picture string) (interface{}, error) {
 // fnBase64Encode encodes a string to base64.
 // Signature: $base64encode(string)
 func fnBase64Encode(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
-	if args[0] == nil {
+	if len(args) == 0 || args[0] == nil {
 		return nil, nil
 	}
 
@@ -1696,7 +1696,7 @@ func fnBase64Encode(ctx context.Context, e *Evaluator, evalCtx *EvalContext, arg
 // fnBase64Decode decodes a base64 string.
 // Signature: $base64decode(string)
 func fnBase64Decode(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
-	if args[0] == nil {
+	if len(args) == 0 || args[0] == nil {
 		return nil, nil
 	}
 
