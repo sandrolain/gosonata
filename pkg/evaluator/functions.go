@@ -220,6 +220,13 @@ func fnAverage(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []i
 		return nil, nil
 	}
 
+	// Type checking: all elements must be numbers
+	for _, v := range arr {
+		if _, ok := v.(float64); !ok {
+			return nil, types.NewError("T0412", "Argument of function 'average' must be an array of numbers", -1)
+		}
+	}
+
 	sum := 0.0
 	for _, v := range arr {
 		num, err := e.toNumber(v)
@@ -240,6 +247,13 @@ func fnMin(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inter
 
 	if len(arr) == 0 {
 		return nil, nil
+	}
+
+	// Type checking: all elements must be numbers
+	for _, v := range arr {
+		if _, ok := v.(float64); !ok {
+			return nil, types.NewError("T0412", "Argument of function 'min' must be an array of numbers", -1)
+		}
 	}
 
 	min, err := e.toNumber(arr[0])
@@ -268,6 +282,13 @@ func fnMax(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inter
 
 	if len(arr) == 0 {
 		return nil, nil
+	}
+
+	// Type checking: all elements must be numbers
+	for _, v := range arr {
+		if _, ok := v.(float64); !ok {
+			return nil, types.NewError("T0412", "Argument of function 'max' must be an array of numbers", -1)
+		}
 	}
 
 	max, err := e.toNumber(arr[0])
