@@ -68,6 +68,7 @@ var precedence = map[TokenType]int{
 	TokenOr:           25, // or
 	TokenAnd:          30, // and
 	TokenCoalesce:     26, // ?? (coalescing, between or and and)
+	TokenDefault:      26, // ?: (default operator, same as coalesce)
 	TokenEqual:        40, // =
 	TokenNotEqual:     40, // !=
 	TokenLess:         40, // <
@@ -110,11 +111,15 @@ func (p *Parser) advance() {
 }
 
 // isRegexContext determines if we're in a context where a regex is expected.
-// Regexes appear after: =, !=, ~>, and at the start of an expression.
+// Regexes appear after: =, !=, ~>, commas, opening brackets/parens, and at the start.
 func (p *Parser) isRegexContext() bool {
 	switch p.current.Type {
 	case TokenEqual, TokenNotEqual, TokenApply:
 		return true
+	case TokenComma, TokenParenOpen, TokenBracketOpen:
+		return true // Arguments and array elements
+	case TokenColon:
+		return true // Object values
 	case TokenEOF:
 		return true // Start of expression
 	default:
@@ -205,6 +210,8 @@ func (p *Parser) parsePrefix() (*types.ASTNode, error) {
 	case TokenMult:
 		// * in prefix position means wildcard (all fields/values)
 		return p.parseWildcard()
+	case TokenRegex:
+		return p.parseRegex()
 	case TokenAnd, TokenOr, TokenIn:
 		// Keywords can also be used as field names (e.g., 'and', 'or', 'in')
 		// Treat them as names when in prefix position
@@ -247,7 +254,7 @@ func (p *Parser) parseInfix(left *types.ASTNode) (*types.ASTNode, error) {
 	case TokenPlus, TokenMinus, TokenMult, TokenDiv, TokenMod,
 		TokenEqual, TokenNotEqual, TokenLess, TokenLessEqual,
 		TokenGreater, TokenGreaterEqual, TokenConcat,
-		TokenAnd, TokenOr, TokenIn, TokenCoalesce:
+		TokenAnd, TokenOr, TokenIn, TokenCoalesce, TokenDefault:
 		return p.parseBinaryOp(left)
 	default:
 		return nil, p.error("S0201", fmt.Sprintf("Unexpected infix token: %s", token.Type.String()))
@@ -634,6 +641,14 @@ func (p *Parser) parseWildcard() (*types.ASTNode, error) {
 	p.advance() // Skip '*'
 
 	node := types.NewASTNode(types.NodeWildcard, pos)
+	return node, nil
+}
+
+// parseRegex parses a regular expression literal.
+func (p *Parser) parseRegex() (*types.ASTNode, error) {
+	node := types.NewASTNode(types.NodeRegex, p.current.Position)
+	node.Value = p.current.Value // Pattern with flags already converted by lexer
+	p.advance()
 	return node, nil
 }
 

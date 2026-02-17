@@ -747,32 +747,70 @@ func fnContains(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []
 		return nil, nil
 	}
 
-	// Type checking: both arguments must be strings
-	if _, ok := args[0].(string); !ok {
+	// Type checking: first argument must be a string
+	str, ok := args[0].(string)
+	if !ok {
 		return nil, types.NewError("T0410", "Argument 1 of function 'contains' must be a string", -1)
 	}
-	if _, ok := args[1].(string); !ok {
-		return nil, types.NewError("T0410", "Argument 2 of function 'contains' must be a string", -1)
-	}
 
-	str := e.toString(args[0])
-	pattern := e.toString(args[1])
-	return strings.Contains(str, pattern), nil
+	// Second argument can be a string or regex
+	switch pattern := args[1].(type) {
+	case string:
+		return strings.Contains(str, pattern), nil
+	case *regexp.Regexp:
+		return pattern.MatchString(str), nil
+	default:
+		return nil, types.NewError("T0410", "Argument 2 of function 'contains' must be a string or regex", -1)
+	}
 }
 
 func fnSplit(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
 	str := e.toString(args[0])
-	separator := e.toString(args[1])
 
+	// Check if separator is a regex or string
 	var parts []string
+	var limit int = -1
+
 	if len(args) == 3 {
-		limit, err := e.toNumber(args[2])
+		limitNum, err := e.toNumber(args[2])
 		if err != nil {
 			return nil, err
 		}
-		parts = strings.SplitN(str, separator, int(limit))
-	} else {
-		parts = strings.Split(str, separator)
+		limit = int(limitNum)
+	}
+
+	switch sep := args[1].(type) {
+	case *regexp.Regexp:
+		// Use regex split
+		// Note: Go's Split with limit works differently than JSONata
+		// In JSONata, limit means "max number of splits to make"
+		// In Go, limit means "max number of substrings to return"
+		// So we need to find the first N matches and split only on those
+		if limit > 0 {
+			matches := sep.FindAllStringIndex(str, limit)
+			if matches == nil || len(matches) == 0 {
+				parts = []string{str}
+			} else {
+				parts = make([]string, 0, len(matches)+1)
+				lastEnd := 0
+				for _, match := range matches {
+					parts = append(parts, str[lastEnd:match[0]])
+					lastEnd = match[1]
+				}
+				// Don't add the remaining part when using limit
+				// JSONata semantics: limit means number of results, not splits
+			}
+		} else {
+			parts = sep.Split(str, -1)
+		}
+	default:
+		// Use string split
+		separator := e.toString(args[1])
+		if limit > 0 {
+			parts = strings.SplitN(str, separator, limit)
+		} else {
+			parts = strings.Split(str, separator)
+		}
 	}
 
 	result := make([]interface{}, len(parts))

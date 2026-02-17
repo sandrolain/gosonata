@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,6 +59,8 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 		return e.evalDescendent(ctx, node, evalCtx)
 	case types.NodeWildcard:
 		return e.evalWildcard(ctx, node, evalCtx)
+	case types.NodeRegex:
+		return e.evalRegex(node)
 	case types.NodeBinary:
 		return e.evalBinary(ctx, node, evalCtx)
 	case types.NodeUnary:
@@ -95,6 +98,22 @@ func (e *Evaluator) evalString(node *types.ASTNode) (interface{}, error) {
 // evalNumber evaluates a number literal.
 func (e *Evaluator) evalNumber(node *types.ASTNode) (interface{}, error) {
 	return node.Value, nil
+}
+
+// evalRegex evaluates a regex literal.
+func (e *Evaluator) evalRegex(node *types.ASTNode) (interface{}, error) {
+	pattern, ok := node.Value.(string)
+	if !ok {
+		return nil, fmt.Errorf("invalid regex pattern type")
+	}
+
+	// Compile the regex pattern (already converted to Go format by lexer)
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid regex pattern: %w", err)
+	}
+
+	return re, nil
 }
 
 // evalBoolean evaluates a boolean literal.
@@ -258,9 +277,11 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 			}
 
 			// Flatten: if value is an array, append its elements
+			// UNLESS the RHS is an array constructor [expression], which preserves structure
 			// Otherwise append the value itself (if not nil)
 			if value != nil {
-				if subArr, isArr := value.([]interface{}); isArr {
+				// If RHS is an explicit array constructor, don't flatten the result
+				if subArr, isArr := value.([]interface{}); isArr && node.RHS.Type != types.NodeArray {
 					result = append(result, subArr...)
 				} else {
 					result = append(result, value)
@@ -622,6 +643,8 @@ func (e *Evaluator) evalBinary(ctx context.Context, node *types.ASTNode, evalCtx
 		return e.evalOr(ctx, node, evalCtx)
 	case "??":
 		return e.evalCoalesce(ctx, node, evalCtx)
+	case "?:":
+		return e.evalDefault(ctx, node, evalCtx)
 	case "..":
 		return e.evalRange(ctx, node, evalCtx)
 	case "~>":
@@ -1222,18 +1245,18 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 		return arr, nil
 	}
 
-	// Check if RHS is a number (index access)
-	if node.RHS.Type == types.NodeNumber {
-		// Direct index access like items[0]
+	// Check if RHS evaluates to a number (index access)
+	// This handles both direct numbers (items[0]) and expressions like items[-1]
+	rhsValue, err := e.evalNode(ctx, node.RHS, evalCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	if indexFloat, ok := rhsValue.(float64); ok {
 		// Get array from collection
 		arr, err := e.toArray(collection)
 		if err != nil {
 			return nil, err
-		}
-
-		indexFloat, ok := node.RHS.Value.(float64)
-		if !ok {
-			return nil, fmt.Errorf("invalid index type")
 		}
 
 		index := int(indexFloat)
@@ -1502,6 +1525,34 @@ func (e *Evaluator) evalCoalesce(ctx context.Context, node *types.ASTNode, evalC
 	return right, nil
 }
 
+// evalDefault evaluates the default operator (?:).
+// Returns left value if it's truthy (not nil, not false, not 0, not empty string, etc.),
+// otherwise returns right value.
+func (e *Evaluator) evalDefault(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	left, err := e.evalNode(ctx, node.LHS, evalCtx)
+	if err != nil {
+		// If left side errors, use right side
+		right, err2 := e.evalNode(ctx, node.RHS, evalCtx)
+		if err2 != nil {
+			return nil, err2
+		}
+		return right, nil
+	}
+
+	// If left is truthy (using default operator semantics), return it
+	if e.isTruthyForDefault(left) {
+		return left, nil
+	}
+
+	// Left is falsy (nil, false, 0, empty string, array of falsy values, functions, etc.), return right
+	right, err := e.evalNode(ctx, node.RHS, evalCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	return right, nil
+}
+
 // evalRange evaluates a range expression.
 func (e *Evaluator) evalRange(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
 	// Evaluate start
@@ -1700,6 +1751,46 @@ func (e *Evaluator) isTruthy(value interface{}) bool {
 		return len(v.Values) > 0
 	default:
 		return true
+	}
+}
+
+// isTruthyForDefault determines if a value is truthy for the default operator (?:).
+// This has special semantics: arrays are truthy only if they contain at least one truthy value,
+// and functions are considered falsy.
+func (e *Evaluator) isTruthyForDefault(value interface{}) bool {
+	if value == nil {
+		return false
+	}
+
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return v != ""
+	case float64:
+		return v != 0
+	case int:
+		return v != 0
+	case types.Null:
+		return false
+	case []interface{}:
+		// Array is truthy only if it contains at least one truthy element (recursively)
+		for _, item := range v {
+			if e.isTruthyForDefault(item) {
+				return true
+			}
+		}
+		return false
+	case map[string]interface{}:
+		return len(v) > 0
+	case *OrderedObject:
+		return len(v.Values) > 0
+	case *Lambda:
+		// Functions are falsy for the default operator
+		return false
+	default:
+		// Other types (including functions) are considered falsy
+		return false
 	}
 }
 
