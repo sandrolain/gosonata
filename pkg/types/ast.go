@@ -78,6 +78,7 @@ type ASTNode struct {
 	ConsArray bool   // Force array construction
 	Stage     string // Pipeline stage identifier
 	Index     int    // Array index (for optimization)
+	Signature string // Function signature (e.g., "<n-n:n>")
 
 	// Object constructor semantics
 	IsGrouping bool // True for infix expr{...}, false for prefix {...} or path-applied

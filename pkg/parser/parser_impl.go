@@ -236,8 +236,8 @@ func (p *Parser) parseInfix(left *types.ASTNode) (*types.ASTNode, error) {
 	case TokenBraceOpen:
 		return p.parseObjectConstructorWithLeft(left)
 	case TokenParenOpen:
-		// Function call: name(...) or $var(...)
-		if left.Type == types.NodeName || left.Type == types.NodeVariable {
+		// Function call: name(...) or $var(...) or lambda(...)
+		if left.Type == types.NodeName || left.Type == types.NodeVariable || left.Type == types.NodeLambda {
 			return p.parseFunctionCall(left)
 		}
 		return nil, p.error("S0201", "Unexpected '(' after non-function expression")
@@ -712,7 +712,15 @@ func (p *Parser) parseFunctionCall(nameNode *types.ASTNode) (*types.ASTNode, err
 	p.advance() // Skip '('
 
 	node := types.NewASTNode(types.NodeFunction, pos)
-	node.Value = nameNode.Value // Function name
+
+	// For lambda calls, save the lambda node in LHS
+	// For named functions, save the name in Value
+	if nameNode.Type == types.NodeLambda {
+		node.LHS = nameNode // Lambda to call
+	} else {
+		node.Value = nameNode.Value // Function name (string)
+	}
+
 	node.Arguments = []*types.ASTNode{}
 
 	// Parse arguments
@@ -809,6 +817,33 @@ func (p *Parser) parseLambda() (*types.ASTNode, error) {
 	}
 
 	p.advance() // Skip ')'
+
+	// Check for optional function signature
+	// Syntax: <type1-type2-...:returnType>
+	// Example: <n-n:n> means two number params, returns number
+	// For now, we parse but don't validate signatures
+	if p.current.Type == TokenLess {
+		p.advance() // Skip '<'
+
+		// Consume all tokens until '>'
+		depth := 1
+		for depth > 0 && p.current.Type != TokenEOF {
+			if p.current.Type == TokenLess {
+				depth++
+			} else if p.current.Type == TokenGreater {
+				depth--
+			}
+			if depth > 0 {
+				p.advance()
+			}
+		}
+
+		if p.current.Type != TokenGreater {
+			return nil, p.error("S0202", "Expected '>' to close function signature")
+		}
+
+		p.advance() // Skip '>'
+	}
 
 	// Expect '{'
 	if err := p.expect(TokenBraceOpen); err != nil {

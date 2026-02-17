@@ -1370,6 +1370,35 @@ func (e *Evaluator) evalCondition(ctx context.Context, node *types.ASTNode, eval
 
 // evalFunction evaluates a function call.
 func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	// Check if this is a lambda call (LHS contains lambda) or built-in function call (Value contains name)
+	if node.LHS != nil {
+		// Lambda call: evaluate lambda first, then call it
+		lambdaValue, err := e.evalNode(ctx, node.LHS, evalCtx)
+		if err != nil {
+			return nil, err
+		}
+
+		// Should be a Lambda
+		lambda, ok := lambdaValue.(*Lambda)
+		if !ok {
+			return nil, fmt.Errorf("expected lambda function, got %T", lambdaValue)
+		}
+
+		// Evaluate arguments
+		args := make([]interface{}, 0, len(node.Arguments))
+		for _, argNode := range node.Arguments {
+			arg, err := e.evalNode(ctx, argNode, evalCtx)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, arg)
+		}
+
+		// Call lambda
+		return e.callLambda(ctx, lambda, args)
+	}
+
+	// Built-in function call
 	funcName := node.Value.(string)
 
 	// Get function definition
