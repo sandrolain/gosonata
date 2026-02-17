@@ -1858,98 +1858,96 @@ func fnFormatNumber(ctx context.Context, e *Evaluator, evalCtx *EvalContext, arg
 		return nil, err
 	}
 
-	// Check for non-finite values
-	if math.IsInf(num, 0) || math.IsNaN(num) {
-		return nil, fmt.Errorf("D3061: cannot format non-finite number")
-	}
-
 	// Default formatting
 	if len(args) == 1 {
 		return e.formatNumberForString(num), nil
 	}
 
-	// Picture string formatting (simplified)
+	// Picture string formatting
 	picture := e.toString(args[1])
 
+	// Create decimal format with default or custom options
+	format := NewDecimalFormat()
+
 	// Parse options if provided
-	decimalSep := "."
-	groupingSep := ","
 	if len(args) > 2 && args[2] != nil {
-		if opts, ok := args[2].(map[string]interface{}); ok {
-			if ds, ok := opts["decimal-separator"].(string); ok {
-				decimalSep = ds
+		var opts map[string]interface{}
+
+		// Handle OrderedObject or regular map
+		switch v := args[2].(type) {
+		case *OrderedObject:
+			opts = v.Values
+		case map[string]interface{}:
+			opts = v
+		}
+
+		if opts != nil {
+			if ds, ok := opts["decimal-separator"].(string); ok && len(ds) > 0 {
+				for _, r := range ds {
+					format.DecimalSeparator = r
+					break
+				}
 			}
-			if gs, ok := opts["grouping-separator"].(string); ok {
-				groupingSep = gs
+			if gs, ok := opts["grouping-separator"].(string); ok && len(gs) > 0 {
+				for _, r := range gs {
+					format.GroupSeparator = r
+					break
+				}
+			}
+			if es, ok := opts["exponent-separator"].(string); ok && len(es) > 0 {
+				for _, r := range es {
+					format.ExponentSeparator = r
+					break
+				}
+			}
+			if ms, ok := opts["minus-sign"].(string); ok && len(ms) > 0 {
+				for _, r := range ms {
+					format.MinusSign = r
+					break
+				}
+			}
+			if inf, ok := opts["infinity"].(string); ok {
+				format.Infinity = inf
+			}
+			if nan, ok := opts["NaN"].(string); ok {
+				format.NaN = nan
+			}
+			if pct, ok := opts["percent"].(string); ok {
+				format.Percent = pct
+			}
+			if pm, ok := opts["per-mille"].(string); ok {
+				format.PerMille = pm
+			}
+			if zd, ok := opts["zero-digit"].(string); ok && len(zd) > 0 {
+				for _, r := range zd {
+					format.ZeroDigit = r
+					break
+				}
+			}
+			if od, ok := opts["digit"].(string); ok && len(od) > 0 {
+				for _, r := range od {
+					format.OptionalDigit = r
+					break
+				}
+			}
+			if ps, ok := opts["pattern-separator"].(string); ok && len(ps) > 0 {
+				for _, r := range ps {
+					format.PatternSeparator = r
+					break
+				}
 			}
 		}
 	}
 
-	// Simple picture string parsing
-	// Format: "#,###.##" style patterns
-	formatted := formatNumberWithPicture(num, picture, decimalSep, groupingSep)
+	// Use the complete XPath-compliant formatting
+	formatted, err := FormatNumberWithPicture(num, picture, format)
+	if err != nil {
+		return nil, types.NewError(types.ErrorCode(err.Error()[:5]), err.Error()[7:], -1)
+	}
+
 	return formatted, nil
 }
 
-// formatNumberWithPicture formats a number using a simple picture string.
-func formatNumberWithPicture(num float64, picture, decimalSep, groupingSep string) string {
-	// Extract decimal places from picture
-	decimalPlaces := 0
-	if idx := strings.IndexAny(picture, "."+decimalSep); idx >= 0 {
-		decimalPlaces = len(picture) - idx - 1
-	}
-
-	// Format with specified decimal places
-	formatStr := fmt.Sprintf("%%.%df", decimalPlaces)
-	formatted := fmt.Sprintf(formatStr, num)
-
-	// Replace decimal separator if needed
-	if decimalSep != "." {
-		formatted = strings.Replace(formatted, ".", decimalSep, 1)
-	}
-
-	// Add grouping separator for thousands
-	if groupingSep != "" && (strings.Contains(picture, ",") || strings.Contains(picture, groupingSep)) {
-		parts := strings.Split(formatted, decimalSep)
-		intPart := parts[0]
-
-		// Handle negative numbers
-		negative := false
-		if strings.HasPrefix(intPart, "-") {
-			negative = true
-			intPart = intPart[1:]
-		}
-
-		// Add grouping from right to left
-		if len(intPart) > 3 {
-			var result []rune
-			for i, c := range intPart {
-				if i > 0 && (len(intPart)-i)%3 == 0 {
-					for _, ch := range groupingSep {
-						result = append(result, ch)
-					}
-				}
-				result = append(result, c)
-			}
-			intPart = string(result)
-		}
-
-		if negative {
-			intPart = "-" + intPart
-		}
-
-		if len(parts) > 1 {
-			formatted = intPart + decimalSep + parts[1]
-		} else {
-			formatted = intPart
-		}
-	}
-
-	return formatted
-}
-
-// fnFormatBase formats a number in a different base (2-36).
-// Signature: $formatBase(number [, radix])
 func fnFormatBase(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
 	if args[0] == nil {
 		return nil, nil
