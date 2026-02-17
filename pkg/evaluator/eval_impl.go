@@ -176,7 +176,8 @@ func (e *Evaluator) evalVariable(node *types.ASTNode, evalCtx *EvalContext) (int
 
 	// $ refers to current context
 	if varName == "" {
-		return evalCtx.Data(), nil
+		data := evalCtx.Data()
+		return data, nil
 	}
 
 	// $$ refers to parent context
@@ -1245,33 +1246,60 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 		return arr, nil
 	}
 
-	// Check if RHS evaluates to a number (index access)
-	// This handles both direct numbers (items[0]) and expressions like items[-1]
-	rhsValue, err := e.evalNode(ctx, node.RHS, evalCtx)
-	if err != nil {
-		return nil, err
+	// Check if RHS is a direct number (index access) without evaluating variables
+	// This avoids evaluating predicates like [$<=3] with wrong context
+	if node.RHS.Type == types.NodeNumber {
+		indexFloat, ok := node.RHS.Value.(float64)
+		if ok {
+			// Get array from collection
+			arr, err := e.toArray(collection)
+			if err != nil {
+				return nil, err
+			}
+
+			index := int(indexFloat)
+
+			// Handle negative indices (from end)
+			if index < 0 {
+				index = len(arr) + index
+			}
+
+			// Check bounds
+			if index < 0 || index >= len(arr) {
+				return nil, nil
+			}
+
+			return arr[index], nil
+		}
 	}
 
-	if indexFloat, ok := rhsValue.(float64); ok {
-		// Get array from collection
-		arr, err := e.toArray(collection)
-		if err != nil {
-			return nil, err
+	// For expressions that might be indices (like variables), try to evaluate as number
+	// But handle errors gracefully and fall through to predicate evaluation
+	if node.RHS.Type != types.NodeBinary && node.RHS.Type != types.NodeUnary {
+		rhsValue, err := e.evalNode(ctx, node.RHS, evalCtx)
+		if err == nil {
+			if indexFloat, ok := rhsValue.(float64); ok {
+				// Get array from collection
+				arr, err := e.toArray(collection)
+				if err != nil {
+					return nil, err
+				}
+
+				index := int(indexFloat)
+
+				// Handle negative indices (from end)
+				if index < 0 {
+					index = len(arr) + index
+				}
+
+				// Check bounds
+				if index < 0 || index >= len(arr) {
+					return nil, nil
+				}
+
+				return arr[index], nil
+			}
 		}
-
-		index := int(indexFloat)
-
-		// Handle negative indices (from end)
-		if index < 0 {
-			index = len(arr) + index
-		}
-
-		// Check bounds
-		if index < 0 || index >= len(arr) {
-			return nil, nil
-		}
-
-		return arr[index], nil
 	}
 
 	// Check if collection is an array
