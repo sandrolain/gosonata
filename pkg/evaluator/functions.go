@@ -674,7 +674,11 @@ func fnLength(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 }
 
 func fnSubstring(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
-	str := e.toString(args[0])
+	// Validate first argument is a string
+	str, ok := args[0].(string)
+	if !ok {
+		return nil, types.NewError(types.ErrArgumentCountMismatch, "Argument 1 of function 'substring' must be a string", -1)
+	}
 
 	start, err := e.toNumber(args[1])
 	if err != nil {
@@ -682,10 +686,16 @@ func fnSubstring(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args [
 	}
 
 	startIdx := int(start)
+	strLen := len(str)
+
+	// Handle negative indices (count from end)
 	if startIdx < 0 {
-		startIdx = 0
+		startIdx = strLen + startIdx
+		if startIdx < 0 {
+			startIdx = 0
+		}
 	}
-	if startIdx > len(str) {
+	if startIdx > strLen {
 		return "", nil
 	}
 
@@ -704,8 +714,8 @@ func fnSubstring(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args [
 	}
 
 	endIdx := startIdx + lengthInt
-	if endIdx > len(str) {
-		endIdx = len(str)
+	if endIdx > strLen {
+		endIdx = strLen
 	}
 
 	return str[startIdx:endIdx], nil
@@ -715,7 +725,11 @@ func fnUppercase(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args [
 	if args[0] == nil {
 		return nil, nil
 	}
-	str := e.toString(args[0])
+	// Validate argument is a string
+	str, ok := args[0].(string)
+	if !ok {
+		return nil, types.NewError(types.ErrArgumentCountMismatch, "Argument 1 of function 'uppercase' must be a string", -1)
+	}
 	return strings.ToUpper(str), nil
 }
 
@@ -723,7 +737,11 @@ func fnLowercase(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args [
 	if args[0] == nil {
 		return nil, nil
 	}
-	str := e.toString(args[0])
+	// Validate argument is a string
+	str, ok := args[0].(string)
+	if !ok {
+		return nil, types.NewError(types.ErrArgumentCountMismatch, "Argument 1 of function 'lowercase' must be a string", -1)
+	}
 	return strings.ToLower(str), nil
 }
 
@@ -2278,8 +2296,17 @@ func fnSubstringBefore(ctx context.Context, e *Evaluator, evalCtx *EvalContext, 
 		return nil, nil
 	}
 
-	str := e.toString(args[0])
-	separator := e.toString(args[1])
+	// Validate first argument is a string
+	str, ok := args[0].(string)
+	if !ok {
+		return nil, types.NewError(types.ErrArgumentCountMismatch, "Argument 1 of function 'substringBefore' must be a string", -1)
+	}
+
+	// Validate second argument is a string
+	separator, ok := args[1].(string)
+	if !ok {
+		return nil, types.NewError(types.ErrArgumentCountMismatch, "Argument 2 of function 'substringBefore' must be a string", -1)
+	}
 
 	// If separator is empty, return empty string
 	if separator == "" {
@@ -2302,8 +2329,17 @@ func fnSubstringAfter(ctx context.Context, e *Evaluator, evalCtx *EvalContext, a
 		return nil, nil
 	}
 
-	str := e.toString(args[0])
-	separator := e.toString(args[1])
+	// Validate first argument is a string
+	str, ok := args[0].(string)
+	if !ok {
+		return nil, types.NewError(types.ErrArgumentCountMismatch, "Argument 1 of function 'substringAfter' must be a string", -1)
+	}
+
+	// Validate second argument is a string
+	separator, ok := args[1].(string)
+	if !ok {
+		return nil, types.NewError(types.ErrArgumentCountMismatch, "Argument 2 of function 'substringAfter' must be a string", -1)
+	}
 
 	// If separator is empty, return the original string
 	if separator == "" {
