@@ -1282,32 +1282,31 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 		}
 	}
 
-	// For expressions that might be indices (like variables), try to evaluate as number
-	// But handle errors gracefully and fall through to predicate evaluation
-	if node.RHS.Type != types.NodeBinary && node.RHS.Type != types.NodeUnary {
-		rhsValue, err := e.evalNode(ctx, node.RHS, evalCtx)
-		if err == nil {
-			if indexFloat, ok := rhsValue.(float64); ok {
-				// Get array from collection
-				arr, err := e.toArray(collection)
-				if err != nil {
-					return nil, err
-				}
-
-				index := int(indexFloat)
-
-				// Handle negative indices (from end)
-				if index < 0 {
-					index = len(arr) + index
-				}
-
-				// Check bounds
-				if index < 0 || index >= len(arr) {
-					return nil, nil
-				}
-
-				return arr[index], nil
+	// For expressions that might be indices (like variables, unary minus, etc.)
+	// Try to evaluate as number and use as index
+	// This handles cases like [-1], [$i], etc.
+	rhsValue, err := e.evalNode(ctx, node.RHS, evalCtx)
+	if err == nil {
+		if indexFloat, ok := rhsValue.(float64); ok {
+			// Get array from collection
+			arr, err := e.toArray(collection)
+			if err != nil {
+				return nil, err
 			}
+
+			index := int(indexFloat)
+
+			// Handle negative indices (from end)
+			if index < 0 {
+				index = len(arr) + index
+			}
+
+			// Check bounds
+			if index < 0 || index >= len(arr) {
+				return nil, nil
+			}
+
+			return arr[index], nil
 		}
 	}
 
