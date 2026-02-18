@@ -828,15 +828,25 @@ func (p *Parser) parseFunctionCall(nameNode *types.ASTNode) (*types.ASTNode, err
 	}
 
 	node.Arguments = []*types.ASTNode{}
+	hasPlaceholder := false
 
 	// Parse arguments
 	if p.current.Type != TokenParenClose {
 		for {
-			arg, err := p.parseExpression(0)
-			if err != nil {
-				return nil, err
+			// Check for placeholder ? in argument position
+			if p.current.Type == TokenCondition {
+				// '?' is a placeholder in function argument context
+				placeholder := types.NewASTNode(types.NodePlaceholder, p.current.Position)
+				node.Arguments = append(node.Arguments, placeholder)
+				hasPlaceholder = true
+				p.advance() // Skip '?'
+			} else {
+				arg, err := p.parseExpression(0)
+				if err != nil {
+					return nil, err
+				}
+				node.Arguments = append(node.Arguments, arg)
 			}
-			node.Arguments = append(node.Arguments, arg)
 
 			if p.current.Type == TokenParenClose {
 				break
@@ -850,6 +860,11 @@ func (p *Parser) parseFunctionCall(nameNode *types.ASTNode) (*types.ASTNode, err
 
 	if err := p.expect(TokenParenClose); err != nil {
 		return nil, err
+	}
+
+	// If function has placeholders, convert to partial application
+	if hasPlaceholder {
+		node.Type = types.NodePartial
 	}
 
 	return node, nil

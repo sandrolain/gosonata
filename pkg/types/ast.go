@@ -35,9 +35,10 @@ const (
 	NodeUnary  NodeType = "unary"  // -, not
 
 	// Functions
-	NodeFunction NodeType = "function" // Function call
-	NodeLambda   NodeType = "lambda"   // Lambda function
-	NodePartial  NodeType = "partial"  // Partial application
+	NodeFunction    NodeType = "function"    // Function call
+	NodeLambda      NodeType = "lambda"      // Lambda function
+	NodePartial     NodeType = "partial"     // Partial application
+	NodePlaceholder NodeType = "placeholder" // ? placeholder for partial application
 
 	// Control flow
 	NodeCondition NodeType = "condition" // ? : operator

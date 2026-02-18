@@ -75,6 +75,8 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 		return e.evalCondition(ctx, node, evalCtx)
 	case types.NodeFunction:
 		return e.evalFunction(ctx, node, evalCtx)
+	case types.NodePartial:
+		return e.evalPartial(node, evalCtx)
 	case types.NodeLambda:
 		return e.evalLambda(node, evalCtx)
 	case types.NodeBind:
@@ -1560,6 +1562,78 @@ func (e *Evaluator) evalLambda(node *types.ASTNode, evalCtx *EvalContext) (inter
 	return lambda, nil
 }
 
+// evalPartial creates a partial application lambda.
+// When a function is called with placeholder arguments (?), it returns a new
+// lambda that accepts values for those placeholders.
+func (e *Evaluator) evalPartial(node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	// Count placeholders and build parameter list
+	placeholderCount := 0
+	for _, arg := range node.Arguments {
+		if arg.Type == types.NodePlaceholder {
+			placeholderCount++
+		}
+	}
+
+	if placeholderCount == 0 {
+		// No placeholders - should not happen, but treat as regular function call
+		return e.evalFunction(context.Background(), node, evalCtx)
+	}
+
+	// Check if partial application is allowed
+	// It's only allowed when calling through a variable/lambda (node.LHS != nil)
+	// Direct function calls (node.Value is string) are not allowed
+	if node.LHS == nil && node.Value != nil {
+		// Direct function call with placeholder
+		funcName, ok := node.Value.(string)
+		if !ok {
+			return nil, types.NewError("T1007", "partial application can only be applied to a function", node.Position)
+		}
+
+		// Check if function exists
+		if _, exists := GetFunction(funcName); !exists {
+			return nil, types.NewError("T1008", fmt.Sprintf("attempted partial application of unknown function: %s", funcName), node.Position)
+		}
+
+		// Function exists but partial application is not supported for direct calls
+		return nil, types.NewError("T1007", "partial application can only be applied to a function", node.Position)
+	}
+
+	// Create parameter names for the lambda ($1, $2, $3, ...)
+	params := make([]string, placeholderCount)
+	for i := 0; i < placeholderCount; i++ {
+		params[i] = fmt.Sprintf("%d", i+1)
+	}
+
+	// Build the body: a function call with placeholders replaced by variables
+	bodyNode := types.NewASTNode(types.NodeFunction, node.Position)
+	bodyNode.Value = node.Value
+	bodyNode.LHS = node.LHS
+	bodyNode.Arguments = make([]*types.ASTNode, len(node.Arguments))
+
+	placeholderIndex := 0
+	for i, arg := range node.Arguments {
+		if arg.Type == types.NodePlaceholder {
+			// Replace placeholder with variable reference
+			varNode := types.NewASTNode(types.NodeVariable, arg.Position)
+			varNode.Value = params[placeholderIndex]
+			bodyNode.Arguments[i] = varNode
+			placeholderIndex++
+		} else {
+			// Keep non-placeholder arguments as-is
+			bodyNode.Arguments[i] = arg
+		}
+	}
+
+	// Create lambda
+	lambda := &Lambda{
+		Params: params,
+		Body:   bodyNode,
+		Ctx:    evalCtx.Clone(),
+	}
+
+	return lambda, nil
+}
+
 // evalBind evaluates an assignment expression.
 func (e *Evaluator) evalBind(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
 	// Evaluate the value
@@ -1752,17 +1826,135 @@ func (e *Evaluator) evalRange(ctx context.Context, node *types.ASTNode, evalCtx 
 }
 
 // evalApply evaluates an apply expression (~>).
+// Syntax: expr ~> $function(args)
+// The result of expr becomes the first argument to the function
+// Special case: function ~> function creates function composition
 func (e *Evaluator) evalApply(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	// Evaluate left side (the data)
+	// Evaluate left side (the data to pipe)
 	data, err := e.evalNode(ctx, node.LHS, evalCtx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Evaluate right side (the function)
+	// Special case: if data is a function, check for function composition
+	isDataFunction := false
+	switch data.(type) {
+	case *Lambda, *FunctionDef:
+		isDataFunction = true
+	}
+
+	// If data is a function and RHS evaluates to a function, create composed function
+	if isDataFunction {
+		// Evaluate RHS to check if it's also a function
+		var rhsFunc interface{}
+		if node.RHS.Type == types.NodeVariable || node.RHS.Type == types.NodePartial {
+			// Variable or partial application that should resolve to a function
+			rhsFunc, err = e.evalNode(ctx, node.RHS, evalCtx)
+			if err != nil {
+				return nil, err
+			}
+		} else if node.RHS.Type == types.NodeFunction && node.RHS.LHS != nil {
+			// Function call through variable
+			rhsFunc, err = e.evalNode(ctx, node.RHS, evalCtx)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// Check if RHS is a function
+		if rhsFunc != nil {
+			switch rhsFunc.(type) {
+			case *Lambda, *FunctionDef:
+				// Create function composition: f ~> g creates λx.g(f(x))
+				return e.createComposition(data, rhsFunc, evalCtx), nil
+			}
+		}
+	}
+
+	// Check if RHS is a function call
+	if node.RHS.Type == types.NodeFunction {
+		// It's a function call - inject data as first argument
+		fnNode := node.RHS
+
+		// If it's a built-in function call (Value contains name)
+		if fnNode.Value != nil {
+			funcName := fnNode.Value.(string)
+			fnDef, ok := GetFunction(funcName)
+			if !ok {
+				return nil, fmt.Errorf("unknown function: %s", funcName)
+			}
+
+			// Evaluate existing arguments
+			args := make([]interface{}, 0, len(fnNode.Arguments)+1)
+			args = append(args, data) // Prepend piped data
+
+			for _, argNode := range fnNode.Arguments {
+				arg, err := e.evalNode(ctx, argNode, evalCtx)
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, arg)
+			}
+
+			// Validate argument count
+			if len(args) < fnDef.MinArgs {
+				return nil, types.NewError(types.ErrArgumentCountMismatch,
+					fmt.Sprintf("function requires at least %d arguments, got %d", fnDef.MinArgs, len(args)), -1)
+			}
+			if fnDef.MaxArgs != -1 && len(args) > fnDef.MaxArgs {
+				return nil, types.NewError(types.ErrArgumentCountMismatch,
+					fmt.Sprintf("function accepts at most %d arguments, got %d", fnDef.MaxArgs, len(args)), -1)
+			}
+
+			// Call the function
+			return fnDef.Impl(ctx, e, evalCtx, args)
+		}
+
+		// If it's a lambda/variable function call (LHS contains callable)
+		if fnNode.LHS != nil {
+			callableValue, err := e.evalNode(ctx, fnNode.LHS, evalCtx)
+			if err != nil {
+				return nil, err
+			}
+
+			// Evaluate arguments
+			args := make([]interface{}, 0, len(fnNode.Arguments)+1)
+			args = append(args, data) // Prepend piped data
+
+			for _, argNode := range fnNode.Arguments {
+				arg, err := e.evalNode(ctx, argNode, evalCtx)
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, arg)
+			}
+
+			// Call based on type
+			switch fn := callableValue.(type) {
+			case *Lambda:
+				return e.callLambda(ctx, fn, args)
+			case *FunctionDef:
+				return fn.Impl(ctx, e, evalCtx, args)
+			default:
+				return nil, fmt.Errorf("expected lambda or function, got %T", callableValue)
+			}
+		}
+	}
+
+	// RHS is not a function call - evaluate it and expect a lambda or regex
 	fn, err := e.evalNode(ctx, node.RHS, evalCtx)
 	if err != nil {
 		return nil, err
+	}
+
+	// If fn is a regex, apply it to data as a match test
+	if regex, ok := fn.(*regexp.Regexp); ok {
+		// Convert data to string
+		str, ok := data.(string)
+		if !ok {
+			str = fmt.Sprint(data)
+		}
+		return regex.MatchString(str), nil
 	}
 
 	// If fn is a lambda, call it with data as argument
@@ -1770,7 +1962,51 @@ func (e *Evaluator) evalApply(ctx context.Context, node *types.ASTNode, evalCtx 
 		return e.callLambda(ctx, lambda, []interface{}{data})
 	}
 
-	return nil, fmt.Errorf("right side of ~> must be a function")
+	// If fn is a function definition, call it
+	if fnDef, ok := fn.(*FunctionDef); ok {
+		return fnDef.Impl(ctx, e, evalCtx, []interface{}{data})
+	}
+
+	return nil, types.NewError(types.ErrInvokeNonFunction, "right side of ~> must be a function", -1)
+}
+
+// createComposition creates a composed function from two functions.
+// composition(f, g) returns λx.g(f(x))
+func (e *Evaluator) createComposition(leftFn, rightFn interface{}, evalCtx *EvalContext) *Lambda {
+	// Create a lambda that accepts one parameter and applies both functions
+	bodyNode := types.NewASTNode(types.NodeFunction, 0)
+
+	// The body calls rightFn with the result of calling leftFn
+	// First, call leftFn with the parameter
+	leftCallNode := types.NewASTNode(types.NodeFunction, 0)
+	leftCallNode.LHS = &types.ASTNode{
+		Type:  types.NodeVariable,
+		Value: "leftFn",
+	}
+	leftCallNode.Arguments = []*types.ASTNode{
+		{
+			Type:  types.NodeVariable,
+			Value: "1", // Parameter name
+		},
+	}
+
+	// Then call rightFn with the result
+	bodyNode.LHS = &types.ASTNode{
+		Type:  types.NodeVariable,
+		Value: "rightFn",
+	}
+	bodyNode.Arguments = []*types.ASTNode{leftCallNode}
+
+	// Create context with both functions bound
+	composedCtx := evalCtx.Clone()
+	composedCtx.SetBinding("leftFn", leftFn)
+	composedCtx.SetBinding("rightFn", rightFn)
+
+	return &Lambda{
+		Params: []string{"1"},
+		Body:   bodyNode,
+		Ctx:    composedCtx,
+	}
 }
 
 // evalSort evaluates a sort expression (^).
