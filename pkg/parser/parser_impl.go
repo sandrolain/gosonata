@@ -857,6 +857,7 @@ func (p *Parser) parseFunctionCall(nameNode *types.ASTNode) (*types.ASTNode, err
 
 // parseConditional parses a conditional (ternary) expression.
 // Syntax: condition ? then_expr : else_expr
+// The else part is optional: condition ? then_expr
 func (p *Parser) parseConditional(condition *types.ASTNode) (*types.ASTNode, error) {
 	pos := p.current.Position
 	p.advance() // Skip '?'
@@ -867,21 +868,24 @@ func (p *Parser) parseConditional(condition *types.ASTNode) (*types.ASTNode, err
 		return nil, err
 	}
 
-	// Expect ':'
-	if err := p.expect(TokenColon); err != nil {
-		return nil, err
-	}
-
-	// Parse 'else' expression (right-associative, so use precedence - 1)
-	elseExpr, err := p.parseExpression(precedence[TokenCondition] - 1)
-	if err != nil {
-		return nil, err
-	}
-
 	node := types.NewASTNode(types.NodeCondition, pos)
-	node.LHS = condition                          // Condition
-	node.RHS = thenExpr                           // Then branch
-	node.Expressions = []*types.ASTNode{elseExpr} // Else branch
+	node.LHS = condition // Condition
+	node.RHS = thenExpr  // Then branch
+
+	// Check if there's an else part (optional)
+	if p.current.Type == TokenColon {
+		p.advance() // Skip ':'
+
+		// Parse 'else' expression (right-associative, so use precedence - 1)
+		elseExpr, err := p.parseExpression(precedence[TokenCondition] - 1)
+		if err != nil {
+			return nil, err
+		}
+		node.Expressions = []*types.ASTNode{elseExpr} // Else branch
+	} else {
+		// No else part: equivalent to undefined
+		node.Expressions = nil
+	}
 
 	return node, nil
 }

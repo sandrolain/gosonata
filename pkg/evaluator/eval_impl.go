@@ -180,12 +180,13 @@ func (e *Evaluator) evalVariable(node *types.ASTNode, evalCtx *EvalContext) (int
 		return data, nil
 	}
 
-	// $$ refers to parent context
+	// $$ refers to root context
 	if varName == "$" {
-		if evalCtx.Parent() != nil {
-			return evalCtx.Parent().Data(), nil
+		if evalCtx.Root() != nil {
+			return evalCtx.Root().Data(), nil
 		}
-		return nil, nil
+		// Fallback: if no root, return current context (shouldn't happen)
+		return evalCtx.Data(), nil
 	}
 
 	// Named variable - check bindings
