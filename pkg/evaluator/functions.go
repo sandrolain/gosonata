@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sandrolain/gosonata/pkg/types"
 )
@@ -663,18 +664,27 @@ func isFunctionValue(value interface{}) bool {
 }
 
 func fnLength(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
-	if str, ok := args[0].(string); ok {
-		return float64(len(str)), nil
+	// undefined returns undefined
+	if args[0] == nil {
+		return nil, nil
 	}
 
-	if arr, err := e.toArray(args[0]); err == nil {
-		return float64(len(arr)), nil
+	// $length only accepts strings
+	str, ok := args[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("T0410: $length() argument must be a string")
 	}
 
-	return 0.0, nil
+	// Count Unicode characters (runes), not bytes
+	return float64(utf8.RuneCountInString(str)), nil
 }
 
 func fnSubstring(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	// undefined returns undefined
+	if args[0] == nil {
+		return nil, nil
+	}
+
 	// Validate first argument is a string
 	str, ok := args[0].(string)
 	if !ok {
@@ -686,8 +696,10 @@ func fnSubstring(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args [
 		return nil, err
 	}
 
+	// Convert to runes to handle Unicode correctly
+	runes := []rune(str)
 	startIdx := int(start)
-	strLen := len(str)
+	strLen := len(runes)
 
 	// Handle negative indices (count from end)
 	if startIdx < 0 {
@@ -701,7 +713,7 @@ func fnSubstring(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args [
 	}
 
 	if len(args) == 2 {
-		return str[startIdx:], nil
+		return string(runes[startIdx:]), nil
 	}
 
 	length, err := e.toNumber(args[2])
@@ -719,7 +731,7 @@ func fnSubstring(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args [
 		endIdx = strLen
 	}
 
-	return str[startIdx:endIdx], nil
+	return string(runes[startIdx:endIdx]), nil
 }
 
 func fnUppercase(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
