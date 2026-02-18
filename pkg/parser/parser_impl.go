@@ -713,10 +713,10 @@ func (p *Parser) parseFunctionCall(nameNode *types.ASTNode) (*types.ASTNode, err
 
 	node := types.NewASTNode(types.NodeFunction, pos)
 
-	// For lambda calls, save the lambda node in LHS
+	// For lambda and variable calls, save the node in LHS
 	// For named functions, save the name in Value
-	if nameNode.Type == types.NodeLambda {
-		node.LHS = nameNode // Lambda to call
+	if nameNode.Type == types.NodeLambda || nameNode.Type == types.NodeVariable {
+		node.LHS = nameNode // Lambda or variable to call
 	} else {
 		node.Value = nameNode.Value // Function name (string)
 	}

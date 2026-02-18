@@ -270,6 +270,10 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 				value, err = e.evalNameString(node.RHS.Value.(string), itemCtx)
 			} else if node.RHS.Type == types.NodeName {
 				value, err = e.evalName(node.RHS, itemCtx)
+			} else if node.RHS.Type == types.NodeFunction && node.RHS.LHS != nil && node.RHS.LHS.Type == types.NodeLambda {
+				// Special case: lambda call in path context
+				// The item should be injected as the first argument
+				value, err = e.evalFunctionWithContextInjection(ctx, node.RHS, itemCtx, item)
 			} else {
 				value, err = e.evalNode(ctx, node.RHS, itemCtx)
 			}
@@ -313,6 +317,11 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 	}
 	if node.RHS.Type == types.NodeName {
 		return e.evalName(node.RHS, pathCtx)
+	}
+	if node.RHS.Type == types.NodeFunction && node.RHS.LHS != nil && node.RHS.LHS.Type == types.NodeLambda {
+		// Special case: lambda call in path context
+		// The left value should be injected as the first argument
+		return e.evalFunctionWithContextInjection(ctx, node.RHS, pathCtx, left)
 	}
 
 	// Evaluate right side in new context
@@ -1370,32 +1379,65 @@ func (e *Evaluator) evalCondition(ctx context.Context, node *types.ASTNode, eval
 
 // evalFunction evaluates a function call.
 func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	// Check if this is a lambda call (LHS contains lambda) or built-in function call (Value contains name)
+	// Check if this is a lambda/variable call (LHS contains lambda or variable) or built-in function call (Value contains name)
 	if node.LHS != nil {
-		// Lambda call: evaluate lambda first, then call it
-		lambdaValue, err := e.evalNode(ctx, node.LHS, evalCtx)
+		// Lambda or variable call: evaluate first, then call it
+		callableValue, err := e.evalNode(ctx, node.LHS, evalCtx)
 		if err != nil {
 			return nil, err
 		}
 
-		// Should be a Lambda
-		lambda, ok := lambdaValue.(*Lambda)
-		if !ok {
-			return nil, fmt.Errorf("expected lambda function, got %T", lambdaValue)
-		}
-
-		// Evaluate arguments
-		args := make([]interface{}, 0, len(node.Arguments))
-		for _, argNode := range node.Arguments {
-			arg, err := e.evalNode(ctx, argNode, evalCtx)
-			if err != nil {
-				return nil, err
+		// Check what we got
+		switch fn := callableValue.(type) {
+		case *Lambda:
+			// User-defined lambda
+			// Evaluate arguments
+			args := make([]interface{}, 0, len(node.Arguments))
+			for _, argNode := range node.Arguments {
+				arg, err := e.evalNode(ctx, argNode, evalCtx)
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, arg)
 			}
-			args = append(args, arg)
-		}
 
-		// Call lambda
-		return e.callLambda(ctx, lambda, args)
+			// Call lambda
+			return e.callLambda(ctx, fn, args)
+
+		case *FunctionDef:
+			// Built-in function (from variable like $not)
+			// Evaluate arguments
+			args := make([]interface{}, 0, len(node.Arguments))
+			for _, argNode := range node.Arguments {
+				arg, err := e.evalNode(ctx, argNode, evalCtx)
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, arg)
+			}
+
+			// If function accepts context and we have fewer args than required, prepend context
+			if fn.AcceptsContext && len(args) < fn.MinArgs {
+				contextData := evalCtx.Data()
+				args = append([]interface{}{contextData}, args...)
+			}
+
+			// Validate argument count
+			if len(args) < fn.MinArgs {
+				return nil, types.NewError(types.ErrArgumentCountMismatch,
+					fmt.Sprintf("function requires at least %d arguments, got %d", fn.MinArgs, len(args)), -1)
+			}
+			if fn.MaxArgs != -1 && len(args) > fn.MaxArgs {
+				return nil, types.NewError(types.ErrArgumentCountMismatch,
+					fmt.Sprintf("function accepts at most %d arguments, got %d", fn.MaxArgs, len(args)), -1)
+			}
+
+			// Call function
+			return fn.Impl(ctx, e, evalCtx, args)
+
+		default:
+			return nil, fmt.Errorf("expected lambda or function, got %T", callableValue)
+		}
 	}
 
 	// Built-in function call
@@ -1435,6 +1477,53 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 
 	// Call function
 	return fnDef.Impl(ctx, e, evalCtx, args)
+}
+
+// evalFunctionWithContextInjection evaluates a lambda call with optional context injection.
+// This is used when a lambda is called in a path context (e.g., Age.function($x,$y){...}(arg))
+// The contextValue is prepended to the arguments ONLY if the lambda needs more arguments.
+func (e *Evaluator) evalFunctionWithContextInjection(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext, contextValue interface{}) (interface{}, error) {
+	// node.LHS should be a lambda
+	if node.LHS == nil || node.LHS.Type != types.NodeLambda {
+		return nil, fmt.Errorf("expected lambda in function call with context injection")
+	}
+
+	// Evaluate lambda
+	lambdaValue, err := e.evalNode(ctx, node.LHS, evalCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	lambda, ok := lambdaValue.(*Lambda)
+	if !ok {
+		return nil, fmt.Errorf("expected lambda function, got %T", lambdaValue)
+	}
+
+	// Evaluate explicit arguments
+	explicitArgs := make([]interface{}, 0, len(node.Arguments))
+	for _, argNode := range node.Arguments {
+		arg, err := e.evalNode(ctx, argNode, evalCtx)
+		if err != nil {
+			return nil, err
+		}
+		explicitArgs = append(explicitArgs, arg)
+	}
+
+	// Determine if we need to inject context
+	// Inject context value as first argument ONLY if we have fewer args than params
+	var args []interface{}
+	if len(explicitArgs) < len(lambda.Params) {
+		// Need context injection
+		args = make([]interface{}, 0, len(explicitArgs)+1)
+		args = append(args, contextValue)
+		args = append(args, explicitArgs...)
+	} else {
+		// Already have enough args, use them as-is
+		args = explicitArgs
+	}
+
+	// Call lambda with (possibly injected) context
+	return e.callLambda(ctx, lambda, args)
 }
 
 // evalLambda creates a lambda function value.
