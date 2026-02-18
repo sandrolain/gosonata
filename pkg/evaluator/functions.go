@@ -33,9 +33,10 @@ type FunctionImpl func(ctx context.Context, e *Evaluator, evalCtx *EvalContext, 
 
 // Lambda represents a lambda function.
 type Lambda struct {
-	Params []string
-	Body   *types.ASTNode
-	Ctx    *EvalContext // Closure context
+	Params    []string
+	Body      *types.ASTNode
+	Ctx       *EvalContext // Closure context
+	Signature *Signature   // Parsed signature for type validation
 }
 
 // OrderedObject preserves insertion order for JSON stringification.

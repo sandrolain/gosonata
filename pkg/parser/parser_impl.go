@@ -821,17 +821,25 @@ func (p *Parser) parseLambda() (*types.ASTNode, error) {
 	// Check for optional function signature
 	// Syntax: <type1-type2-...:returnType>
 	// Example: <n-n:n> means two number params, returns number
-	// For now, we parse but don't validate signatures
+	var signatureStr string
 	if p.current.Type == TokenLess {
+		sigStart := "<"
 		p.advance() // Skip '<'
 
-		// Consume all tokens until '>'
+		// Consume all tokens until '>' and build signature string
 		depth := 1
 		for depth > 0 && p.current.Type != TokenEOF {
 			if p.current.Type == TokenLess {
 				depth++
+				sigStart += "<"
 			} else if p.current.Type == TokenGreater {
 				depth--
+				if depth > 0 {
+					sigStart += ">"
+				}
+			} else {
+				// Add token value to signature string
+				sigStart += p.current.Value
 			}
 			if depth > 0 {
 				p.advance()
@@ -842,6 +850,9 @@ func (p *Parser) parseLambda() (*types.ASTNode, error) {
 			return nil, p.error("S0202", "Expected '>' to close function signature")
 		}
 
+		sigStart += ">"
+		signatureStr = sigStart
+		node.Signature = signatureStr
 		p.advance() // Skip '>'
 	}
 

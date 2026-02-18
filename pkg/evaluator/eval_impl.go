@@ -1538,11 +1538,23 @@ func (e *Evaluator) evalLambda(node *types.ASTNode, evalCtx *EvalContext) (inter
 		}
 	}
 
+	// Parse signature if present
+	var sig *Signature
+	if node.Signature != "" {
+		parsedSig, err := ParseSignature(node.Signature)
+		if err != nil {
+			// Return S0401 error for invalid signature
+			return nil, err
+		}
+		sig = parsedSig
+	}
+
 	// Create lambda with closure over current context
 	lambda := &Lambda{
-		Params: params,
-		Body:   node.RHS, // Body is in RHS
-		Ctx:    evalCtx.Clone(),
+		Params:    params,
+		Body:      node.RHS, // Body is in RHS
+		Ctx:       evalCtx.Clone(),
+		Signature: sig,
 	}
 
 	return lambda, nil
@@ -1853,9 +1865,54 @@ func (e *Evaluator) evalSort(ctx context.Context, node *types.ASTNode, evalCtx *
 
 // callLambda calls a lambda function with the given arguments.
 func (e *Evaluator) callLambda(ctx context.Context, lambda *Lambda, args []interface{}) (interface{}, error) {
-	// Validate argument count
-	if len(args) != len(lambda.Params) {
-		return nil, fmt.Errorf("lambda expects %d arguments, got %d", len(lambda.Params), len(args))
+	// Check for undefined arguments - if any argument is undefined (nil),
+	// the result is undefined per JSONata spec
+	for _, arg := range args {
+		if arg == nil {
+			return nil, nil // undefined propagates
+		}
+	}
+
+	// Validate signature if present
+	if lambda.Signature != nil {
+		// Count required parameters (non-optional)
+		requiredCount := 0
+		for _, param := range lambda.Signature.Params {
+			if !param.Optional {
+				requiredCount++
+			}
+		}
+
+		// Check argument count (must be between required and total params)
+		if len(args) < requiredCount || len(args) > len(lambda.Signature.Params) {
+			if requiredCount == len(lambda.Signature.Params) {
+				return nil, fmt.Errorf("lambda expects %d arguments, got %d", len(lambda.Signature.Params), len(args))
+			} else {
+				return nil, fmt.Errorf("lambda expects %d-%d arguments, got %d", requiredCount, len(lambda.Signature.Params), len(args))
+			}
+		}
+
+		// Apply auto-wrapping and validate each argument
+		for i := range args {
+			param := lambda.Signature.Params[i]
+
+			// Auto-wrap: if parameter expects array but arg is not array, wrap it
+			if param.Type == TypeArray {
+				if _, isArray := args[i].([]interface{}); !isArray {
+					args[i] = []interface{}{args[i]}
+				}
+			}
+
+			// Validate argument against parameter type
+			if err := param.ValidateArgument(args[i]); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		// No signature - validate argument count matches parameter count
+		if len(args) != len(lambda.Params) {
+			return nil, fmt.Errorf("lambda expects %d arguments, got %d", len(lambda.Params), len(args))
+		}
 	}
 
 	// Create new context with lambda's closure context as parent
@@ -1863,7 +1920,10 @@ func (e *Evaluator) callLambda(ctx context.Context, lambda *Lambda, args []inter
 
 	// Bind parameters
 	for i, param := range lambda.Params {
-		lambdaCtx.SetBinding(param, args[i])
+		if i < len(args) {
+			lambdaCtx.SetBinding(param, args[i])
+		}
+		// Optional parameters without args remain unbound
 	}
 
 	// Evaluate body
