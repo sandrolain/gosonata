@@ -715,22 +715,20 @@ func (p *Parser) parseDescendentPrefix() (*types.ASTNode, error) {
 	var right *types.ASTNode
 	var err error
 
-	// Check if the next token can be part of the path
+	// Check if the next token can be part of the path (NOT [ which is a filter)
 	if p.current.Type != TokenEOF &&
 		p.current.Type != TokenSemicolon &&
 		p.current.Type != TokenParenClose &&
 		p.current.Type != TokenBracketClose &&
+		p.current.Type != TokenBracketOpen &&
 		p.current.Type != TokenBraceClose &&
-		p.current.Type != TokenComma {
+		p.current.Type != TokenComma &&
+		p.current.Type != TokenDot {
 		// Parse the right-hand side with descendent precedence
 		right, err = p.parseExpression(precedence[TokenDescendent])
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		// Just ** means all descendants (wildcard)
-		right = types.NewASTNode(types.NodeName, pos)
-		right.Value = "*"
 	}
 
 	node := types.NewASTNode(types.NodeDescendant, pos)

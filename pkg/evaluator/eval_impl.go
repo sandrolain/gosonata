@@ -359,7 +359,62 @@ func (e *Evaluator) evalDescendent(ctx context.Context, node *types.ASTNode, eva
 	// Check if we should keep singleton arrays
 	keepArray := node.KeepArray || hasKeepArrayInChain(node.LHS)
 
-	// Collect ALL descendants (not just matching ones)
+	// If no RHS, use JS-style collection: collect ALL non-array descendants including root.
+	// This matches the JSONata reference implementation's recurseDescendants behavior.
+	if node.RHS == nil {
+		var results []interface{}
+		var recurseDescendants func(data interface{}) error
+		recurseDescendants = func(data interface{}) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			if data == nil {
+				return nil
+			}
+			// Add the item itself if it's not an array (matches JS reference)
+			if _, isArray := data.([]interface{}); !isArray {
+				results = append(results, data)
+			}
+			// Recurse into children
+			switch v := data.(type) {
+			case map[string]interface{}:
+				for _, fieldValue := range v {
+					if err := recurseDescendants(fieldValue); err != nil {
+						return err
+					}
+				}
+			case *OrderedObject:
+				for _, k := range v.Keys {
+					if err := recurseDescendants(v.Values[k]); err != nil {
+						return err
+					}
+				}
+			case []interface{}:
+				for _, item := range v {
+					if err := recurseDescendants(item); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}
+		if err := recurseDescendants(left); err != nil {
+			return nil, err
+		}
+		results = deduplicateResults(results)
+		if len(results) == 0 {
+			return nil, nil
+		}
+		if len(results) == 1 && !keepArray {
+			return results[0], nil
+		}
+		return results, nil
+	}
+
+	// With RHS: collect all descendants and apply the RHS path to each candidate.
+	// This supports expressions like **.foo (apply "foo" to each descendant).
 	var descendants []interface{}
 
 	// Helper function to recursively collect ALL descendant values
@@ -2191,6 +2246,46 @@ func (e *Evaluator) isTruthy(value interface{}) bool {
 		return len(v) > 0
 	case *OrderedObject:
 		return len(v.Values) > 0
+	default:
+		return true
+	}
+}
+
+// isTruthyBoolean implements the $boolean() function semantics:
+// - Functions are always false
+// - Arrays are true only if they contain at least one truthy element (recursively)
+// - All other rules same as isTruthy
+func (e *Evaluator) isTruthyBoolean(value interface{}) bool {
+	if value == nil {
+		return false
+	}
+
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return v != ""
+	case float64:
+		return v != 0
+	case int:
+		return v != 0
+	case types.Null:
+		return false
+	case []interface{}:
+		// Array is true only if at least one element is truthy (recursively)
+		for _, item := range v {
+			if e.isTruthyBoolean(item) {
+				return true
+			}
+		}
+		return false
+	case map[string]interface{}:
+		return len(v) > 0
+	case *OrderedObject:
+		return len(v.Values) > 0
+	case *Lambda, *FunctionDef:
+		// Functions are always falsy in $boolean() context
+		return false
 	default:
 		return true
 	}

@@ -134,7 +134,8 @@ func initBuiltinFunctions() {
 			"random": {Name: "random", MinArgs: 0, MaxArgs: 0, Impl: fnRandom},
 
 			// Object functions
-			"each":   {Name: "each", MinArgs: 2, MaxArgs: 2, Impl: fnEach},
+			"each":   {Name: "each", MinArgs: 2, MaxArgs: 2, AcceptsContext: true, Impl: fnEach},
+			"sift":   {Name: "sift", MinArgs: 2, MaxArgs: 2, AcceptsContext: true, Impl: fnSift},
 			"keys":   {Name: "keys", MinArgs: 1, MaxArgs: 1, Impl: fnKeys},
 			"lookup": {Name: "lookup", MinArgs: 2, MaxArgs: 2, Impl: fnLookup},
 			"merge":  {Name: "merge", MinArgs: 1, MaxArgs: 1, Impl: fnMerge},
@@ -796,52 +797,67 @@ func fnContains(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []
 }
 
 func fnSplit(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
-	str := e.toString(args[0])
+	// Undefined input → undefined
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	str, ok := args[0].(string)
+	if !ok {
+		return nil, types.NewError(types.ErrArgumentCountMismatch, "The first argument of the function '$split' must be a string", -1)
+	}
+
+	// Check for limit argument type validation
+	limit := -1
+	if len(args) >= 3 && args[2] != nil {
+		// Limit must be a number, not a string
+		switch v := args[2].(type) {
+		case float64:
+			limit = int(v)
+		case int:
+			limit = v
+		default:
+			return nil, types.NewError(types.ErrArgumentCountMismatch, "The third argument of the function '$split' must be a number", -1)
+		}
+		// Negative limit → D3020 error
+		if limit < 0 {
+			return nil, types.NewError("D3020", "Third argument of $split cannot be negative", -1)
+		}
+		// limit = 0 → empty array
+		if limit == 0 {
+			return []interface{}{}, nil
+		}
+	}
 
 	// Check if separator is a regex or string
 	var parts []string
-	var limit int = -1
-
-	if len(args) == 3 {
-		limitNum, err := e.toNumber(args[2])
-		if err != nil {
-			return nil, err
-		}
-		limit = int(limitNum)
-	}
 
 	switch sep := args[1].(type) {
 	case *regexp.Regexp:
-		// Use regex split
-		// Note: Go's Split with limit works differently than JSONata
-		// In JSONata, limit means "max number of splits to make"
-		// In Go, limit means "max number of substrings to return"
-		// So we need to find the first N matches and split only on those
 		if limit > 0 {
-			matches := sep.FindAllStringIndex(str, limit)
-			if matches == nil || len(matches) == 0 {
-				parts = []string{str}
-			} else {
-				parts = make([]string, 0, len(matches)+1)
-				lastEnd := 0
-				for _, match := range matches {
-					parts = append(parts, str[lastEnd:match[0]])
-					lastEnd = match[1]
-				}
-				// Don't add the remaining part when using limit
-				// JSONata semantics: limit means number of results, not splits
+			// Split all, then truncate
+			allParts := sep.Split(str, -1)
+			if len(allParts) > limit {
+				allParts = allParts[:limit]
 			}
+			parts = allParts
 		} else {
 			parts = sep.Split(str, -1)
 		}
-	default:
-		// Use string split
-		separator := e.toString(args[1])
+	case string:
 		if limit > 0 {
-			parts = strings.SplitN(str, separator, limit)
+			// Split all, then truncate to limit
+			allParts := strings.Split(str, sep)
+			if len(allParts) > limit {
+				allParts = allParts[:limit]
+			}
+			parts = allParts
 		} else {
-			parts = strings.Split(str, separator)
+			parts = strings.Split(str, sep)
 		}
+	default:
+		// Separator must be a string or regex
+		return nil, types.NewError(types.ErrArgumentCountMismatch, "The second argument of the function '$split' must be a string or regex", -1)
 	}
 
 	result := make([]interface{}, len(parts))
@@ -853,19 +869,40 @@ func fnSplit(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []int
 }
 
 func fnJoin(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
-	arr, err := e.toArray(args[0])
-	if err != nil {
-		return nil, err
+	// undefined input → undefined
+	if args[0] == nil {
+		return nil, nil
 	}
 
+	// If first argument is a string, return it directly (like single-element join)
+	if str, ok := args[0].(string); ok {
+		return str, nil
+	}
+
+	// First argument must be an array
+	arr, ok := args[0].([]interface{})
+	if !ok {
+		return nil, types.NewError("T0412", "The argument of the function '$join' is not an array", -1)
+	}
+
+	// Separator must be a string (if provided)
 	separator := ""
-	if len(args) == 2 {
-		separator = e.toString(args[1])
+	if len(args) == 2 && args[1] != nil {
+		sep, ok := args[1].(string)
+		if !ok {
+			return nil, types.NewError(types.ErrArgumentCountMismatch, "The second argument of the function '$join' is not a string", -1)
+		}
+		separator = sep
 	}
 
+	// All array elements must be strings
 	strs := make([]string, len(arr))
 	for i, v := range arr {
-		strs[i] = e.toString(v)
+		s, ok := v.(string)
+		if !ok {
+			return nil, types.NewError("T0412", "The argument of the function '$join' is not an array of strings", -1)
+		}
+		strs[i] = s
 	}
 
 	return strings.Join(strs, separator), nil
@@ -940,7 +977,14 @@ func fnNumber(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 }
 
 func fnBoolean(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
-	return e.isTruthy(args[0]), nil
+	// Per JSONata spec for $boolean():
+	// - undefined → undefined
+	// - functions → false
+	// - arrays → true only if at least one truthy element (recursively)
+	if args[0] == nil {
+		return nil, nil // undefined → undefined
+	}
+	return e.isTruthyBoolean(args[0]), nil
 }
 
 func fnNot(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
@@ -1089,15 +1133,7 @@ func fnEach(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inte
 		return []interface{}{}, nil
 	}
 
-	lambda, ok := args[1].(*Lambda)
-	if !ok {
-		return nil, fmt.Errorf("second argument to $each must be a function")
-	}
-
-	// Validate lambda has exactly 2 parameters (value, key)
-	if len(lambda.Params) != 2 {
-		return nil, fmt.Errorf("$each requires a function with 2 parameters (value, key), got %d", len(lambda.Params))
-	}
+	fnArg := args[1]
 
 	var keys []string
 	var values map[string]interface{}
@@ -1121,18 +1157,153 @@ func fnEach(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inte
 	result := make([]interface{}, 0, len(keys))
 	for _, key := range keys {
 		value := values[key]
-		// Call lambda with (value, key)
-		lambdaResult, err := e.callLambda(ctx, lambda, []interface{}{value, key})
+		var itemResult interface{}
+		var err error
+
+		switch fn := fnArg.(type) {
+		case *Lambda:
+			// Pass args based on how many params the lambda expects
+			var callArgs []interface{}
+			switch len(fn.Params) {
+			case 1:
+				callArgs = []interface{}{value}
+			case 2:
+				callArgs = []interface{}{value, key}
+			default: // 3+
+				callArgs = []interface{}{value, key, obj}
+			}
+			itemResult, err = e.callLambda(ctx, fn, callArgs)
+		case *FunctionDef:
+			// Call with (value, key) respecting function's max args
+			var callArgs []interface{}
+			if fn.MaxArgs == 1 {
+				callArgs = []interface{}{value}
+			} else if fn.MaxArgs < 0 || fn.MaxArgs >= 3 {
+				callArgs = []interface{}{value, key, obj}
+			} else {
+				callArgs = []interface{}{value, key}
+			}
+			itemResult, err = fn.Impl(ctx, e, evalCtx, callArgs)
+		default:
+			return nil, fmt.Errorf("second argument to $each must be a function")
+		}
+
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, lambdaResult)
+		// Skip undefined results
+		if itemResult != nil {
+			result = append(result, itemResult)
+		}
 	}
 
 	return result, nil
 }
 
-// --- Math Functions (Extended) ---
+// fnSift filters an object's key-value pairs using a predicate function.
+// Signature: $sift(obj, function($v, $k?, $o?) → boolean)
+// Returns a new object with only the key-value pairs where the function returns true.
+func fnSift(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	obj := args[0]
+	if obj == nil {
+		return nil, nil
+	}
+
+	// If obj is an array, map sift over each element (path context mapping)
+	if arr, ok := obj.([]interface{}); ok {
+		results := make([]interface{}, 0, len(arr))
+		for _, elem := range arr {
+			if elem == nil {
+				continue
+			}
+			res, err := fnSift(ctx, e, evalCtx, []interface{}{elem, args[1]})
+			if err != nil {
+				return nil, err
+			}
+			if res != nil {
+				results = append(results, res)
+			}
+		}
+		if len(results) == 0 {
+			return nil, nil
+		}
+		return results, nil
+	}
+
+	fnArg := args[1]
+
+	var keys []string
+	var values map[string]interface{}
+
+	// Handle OrderedObject to preserve key order
+	if orderedObj, ok := obj.(*OrderedObject); ok {
+		keys = orderedObj.Keys
+		values = orderedObj.Values
+	} else if mapObj, ok := obj.(map[string]interface{}); ok {
+		keys = make([]string, 0, len(mapObj))
+		for k := range mapObj {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		values = mapObj
+	} else {
+		// Non-object: return nil (undefined) when used in path context over mixed arrays
+		return nil, nil
+	}
+
+	// Build result as OrderedObject to preserve order
+	resultObj := &OrderedObject{
+		Keys:   make([]string, 0),
+		Values: make(map[string]interface{}),
+	}
+
+	for _, key := range keys {
+		value := values[key]
+		var include interface{}
+		var err error
+
+		switch fn := fnArg.(type) {
+		case *Lambda:
+			var callArgs []interface{}
+			switch len(fn.Params) {
+			case 1:
+				callArgs = []interface{}{value}
+			case 2:
+				callArgs = []interface{}{value, key}
+			default: // 3+
+				callArgs = []interface{}{value, key, obj}
+			}
+			include, err = e.callLambda(ctx, fn, callArgs)
+		case *FunctionDef:
+			var callArgs []interface{}
+			if fn.MaxArgs == 1 {
+				callArgs = []interface{}{value}
+			} else if fn.MaxArgs < 0 || fn.MaxArgs >= 3 {
+				callArgs = []interface{}{value, key, obj}
+			} else {
+				callArgs = []interface{}{value, key}
+			}
+			include, err = fn.Impl(ctx, e, evalCtx, callArgs)
+		default:
+			return nil, fmt.Errorf("second argument to $sift must be a function")
+		}
+
+		if err != nil {
+			return nil, err
+		}
+
+		if e.isTruthy(include) {
+			resultObj.Keys = append(resultObj.Keys, key)
+			resultObj.Values[key] = value
+		}
+	}
+
+	if len(resultObj.Keys) == 0 {
+		return nil, nil
+	}
+
+	return resultObj, nil
+}
 
 // fnRandom returns a pseudo-random number between 0 (inclusive) and 1 (exclusive).
 func fnRandom(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
@@ -2263,6 +2434,7 @@ func fnPad(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inter
 	}
 
 	str := e.toString(args[0])
+	strRunes := []rune(str)
 
 	width, err := e.toNumber(args[1])
 	if err != nil {
@@ -2271,11 +2443,11 @@ func fnPad(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inter
 	targetWidth := int(width)
 
 	// Default pad character is space
-	padChar := " "
+	padRunes := []rune{' '}
 	if len(args) > 2 && args[2] != nil {
-		padChar = e.toString(args[2])
-		if len(padChar) == 0 {
-			padChar = " "
+		padStr := e.toString(args[2])
+		if len([]rune(padStr)) > 0 {
+			padRunes = []rune(padStr)
 		}
 	}
 
@@ -2285,19 +2457,24 @@ func fnPad(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inter
 		targetWidth = -targetWidth
 	}
 
-	// Calculate padding needed
-	strLen := len(str)
+	// Calculate padding needed (using rune count for Unicode correctness)
+	strLen := len(strRunes)
 	if strLen >= targetWidth {
 		return str, nil
 	}
 
 	padCount := targetWidth - strLen
-	padding := strings.Repeat(padChar, padCount)
+
+	// Build padding by cycling through pad runes
+	padding := make([]rune, padCount)
+	for i := 0; i < padCount; i++ {
+		padding[i] = padRunes[i%len(padRunes)]
+	}
 
 	if leftPad {
-		return padding + str, nil
+		return string(padding) + string(strRunes), nil
 	}
-	return str + padding, nil
+	return string(strRunes) + string(padding), nil
 }
 
 // fnSubstringBefore returns the substring before the first occurrence of a separator.
