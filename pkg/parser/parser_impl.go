@@ -3,6 +3,8 @@ package parser
 import (
 	"fmt"
 	"strconv"
+	"strings"
+	"unicode/utf16"
 
 	"github.com/sandrolain/gosonata/pkg/types"
 )
@@ -261,10 +263,114 @@ func (p *Parser) parseInfix(left *types.ASTNode) (*types.ASTNode, error) {
 	}
 }
 
+// unescapeString processes escape sequences in a string literal.
+// Handles standard escapes (\n, \t, etc.) and Unicode escapes (\uXXXX).
+// Also handles UTF-16 surrogate pairs for characters outside the BMP.
+func unescapeString(s string) (string, error) {
+	if !strings.Contains(s, "\\") {
+		return s, nil // Fast path: no escapes
+	}
+
+	var result strings.Builder
+	result.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			result.WriteByte(s[i])
+			continue
+		}
+
+		i++ // Skip backslash
+		if i >= len(s) {
+			return "", fmt.Errorf("Invalid escape sequence at end of string")
+		}
+
+		switch s[i] {
+		case 'n':
+			result.WriteByte('\n')
+		case 't':
+			result.WriteByte('\t')
+		case 'r':
+			result.WriteByte('\r')
+		case 'b':
+			result.WriteByte('\b')
+		case 'f':
+			result.WriteByte('\f')
+		case '\\':
+			result.WriteByte('\\')
+		case '"':
+			result.WriteByte('"')
+		case '\'':
+			result.WriteByte('\'')
+		case '/':
+			result.WriteByte('/')
+		case 'u':
+			// Unicode escape: \uXXXX
+			if i+4 >= len(s) {
+				return "", fmt.Errorf("Invalid \\u escape: not enough characters")
+			}
+			hex := s[i+1 : i+5]
+			codePoint, err := strconv.ParseUint(hex, 16, 16)
+			if err != nil {
+				return "", fmt.Errorf("Invalid \\u escape: %s", hex)
+			}
+			i += 4
+
+			r := rune(codePoint)
+
+			// Check for UTF-16 surrogate pair (high surrogate: 0xD800-0xDBFF)
+			if r >= 0xD800 && r <= 0xDBFF {
+				// This is a high surrogate, expect a low surrogate next
+				if i+6 >= len(s) || s[i+1] != '\\' || s[i+2] != 'u' {
+					// Invalid surrogate pair
+					result.WriteRune(r)
+				} else {
+					// Read low surrogate
+					lowHex := s[i+3 : i+7]
+					lowCodePoint, err := strconv.ParseUint(lowHex, 16, 16)
+					if err != nil {
+						result.WriteRune(r)
+					} else {
+						lowSurrogate := rune(lowCodePoint)
+						if lowSurrogate >= 0xDC00 && lowSurrogate <= 0xDFFF {
+							// Valid surrogate pair, decode to code point
+							codePoint := utf16.Decode([]uint16{uint16(r), uint16(lowSurrogate)})
+							if len(codePoint) > 0 {
+								result.WriteRune(codePoint[0])
+								i += 6 // Skip \uXXXX
+							} else {
+								result.WriteRune(r)
+							}
+						} else {
+							// Not a low surrogate
+							result.WriteRune(r)
+						}
+					}
+				}
+			} else {
+				// Normal Unicode character
+				result.WriteRune(r)
+			}
+		default:
+			// Unknown escape - this is an error in JSONata
+			return "", fmt.Errorf("Invalid escape sequence: \\%c", s[i])
+		}
+	}
+
+	return result.String(), nil
+}
+
 // parseString parses a string literal.
 func (p *Parser) parseString() (*types.ASTNode, error) {
 	node := types.NewASTNode(types.NodeString, p.current.Position)
-	node.Value = p.current.Value
+
+	// Process escape sequences
+	unescaped, err := unescapeString(p.current.Value)
+	if err != nil {
+		return nil, p.error("S0103", fmt.Sprintf("Invalid string literal: %v", err))
+	}
+
+	node.Value = unescaped
 	p.advance()
 	return node, nil
 }
