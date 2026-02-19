@@ -14,6 +14,22 @@ import (
 )
 
 // evalNode evaluates an AST node in the given context.
+// recurseDepthKey is used to store recursion depth in context.Context.
+type recurseDepthKey struct{}
+
+// getRecurseDepth returns the current lambda recursion depth from a context.Context.
+func getRecurseDepth(ctx context.Context) int {
+	if d, ok := ctx.Value(recurseDepthKey{}).(int); ok {
+		return d
+	}
+	return 0
+}
+
+// withRecurseDepth returns a context.Context with incremented recursion depth.
+func withRecurseDepth(ctx context.Context, depth int) context.Context {
+	return context.WithValue(ctx, recurseDepthKey{}, depth)
+}
+
 func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
 	// Check context cancellation
 	select {
@@ -23,8 +39,8 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 	}
 
 	// Check recursion depth
-	if evalCtx.Depth() > e.opts.MaxDepth {
-		return nil, fmt.Errorf("maximum recursion depth exceeded")
+	if getRecurseDepth(ctx) > e.opts.MaxDepth {
+		return nil, types.NewError(types.ErrUndefinedVariable, "maximum recursion depth exceeded", -1)
 	}
 
 	if node == nil {
@@ -1619,7 +1635,7 @@ func (e *Evaluator) evalLambda(node *types.ASTNode, evalCtx *EvalContext) (inter
 		sig = parsedSig
 	}
 
-	// Create lambda with closure over current context.
+	// Create new context with lambda's closure context as parent.
 	// We store evalCtx directly (not cloned) so that the lambda can see
 	// bindings added AFTER lambda creation in the same block scope (enables recursion).
 	// callLambda() creates its own clone of this context at call time.
@@ -2333,8 +2349,12 @@ func (e *Evaluator) callLambda(ctx context.Context, lambda *Lambda, args []inter
 		}
 	}
 
-	// Create new context with lambda's closure context as parent
+	// Create new context with lambda's closure context as parent.
+	// Clone (not CloneDeeper) - recursion depth is tracked via context.Context key.
 	lambdaCtx := lambda.Ctx.Clone()
+
+	// Increment recursion depth in context.Context to catch infinite recursion.
+	ctx = withRecurseDepth(ctx, getRecurseDepth(ctx)+1)
 
 	// Bind parameters
 	for i, param := range lambda.Params {

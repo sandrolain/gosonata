@@ -110,6 +110,14 @@ func (c *EvalContext) Clone() *EvalContext {
 	}
 }
 
+// CloneDeeper creates a shallow copy with depth incremented by 1.
+// Used for lambda calls to track recursion depth.
+func (c *EvalContext) CloneDeeper() *EvalContext {
+	cloned := c.Clone()
+	cloned.depth++
+	return cloned
+}
+
 // String returns a string representation of the context.
 func (c *EvalContext) String() string {
 	return fmt.Sprintf("Context{depth=%d, bindings=%d}", c.depth, len(c.bindings))

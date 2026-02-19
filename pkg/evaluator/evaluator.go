@@ -61,7 +61,7 @@ func New(opts ...EvalOption) *Evaluator {
 	options := EvalOptions{
 		Caching:     false, // Disabled by default
 		Concurrency: true,  // Enabled by default
-		MaxDepth:    100,
+		MaxDepth:    10000,
 		Timeout:     30 * time.Second,
 	}
 
