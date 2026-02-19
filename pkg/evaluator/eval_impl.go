@@ -2331,14 +2331,18 @@ func (e *Evaluator) evalSort(ctx context.Context, node *types.ASTNode, evalCtx *
 	}
 
 	// Validate sort key types: all keys for a given spec must be the same type
-	// and must be strings or numbers (T2007/T2008)
+	// and must be strings or numbers (T2007/T2008). Null keys cause T2008.
 	for specIdx := range sortSpecs {
 		var firstType string
+		var hasNonNull bool
+		var hasNull bool
 		for _, sd := range sortData {
 			key := sd.keys[specIdx]
 			if key == nil {
+				hasNull = true
 				continue
 			}
+			hasNonNull = true
 			var keyType string
 			switch key.(type) {
 			case float64, int:
@@ -2353,6 +2357,10 @@ func (e *Evaluator) evalSort(ctx context.Context, node *types.ASTNode, evalCtx *
 			} else if firstType != keyType {
 				return nil, types.NewError(types.ErrSortMixedTypes, "sort arguments must be of the same type", -1)
 			}
+		}
+		// Null mixed with non-null values is T2008
+		if hasNull && hasNonNull {
+			return nil, types.NewError(types.ErrSortMixedTypes, "sort arguments must be of the same type", -1)
 		}
 	}
 

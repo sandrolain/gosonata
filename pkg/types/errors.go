@@ -33,10 +33,12 @@ const (
 	// D0xxx: Evaluation errors
 	ErrNumberTooLarge         ErrorCode = "D1001"
 	ErrInvokeNonFunction      ErrorCode = "D1002"
+	ErrZeroLengthMatch        ErrorCode = "D1004"
 	ErrLeftSideRange          ErrorCode = "D2001"
 	ErrRangeTooLarge          ErrorCode = "D2014"
 	ErrSerializeNonFinite     ErrorCode = "D3001"
 	ErrRecursiveDefinition    ErrorCode = "D3010"
+	ErrReplacementNotString   ErrorCode = "D3012"
 	ErrStackOverflow          ErrorCode = "D3020"
 	ErrReduceInsufficientArgs ErrorCode = "D3050"
 	ErrTypeMismatch           ErrorCode = "D3070"

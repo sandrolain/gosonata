@@ -1799,6 +1799,111 @@ func fnMatch(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []int
 	return result, nil
 }
 
+// jsonataExpandTemplate expands a JSONata replacement template string.
+// $0 = full match, $1..$N = capture groups (1-indexed).
+// Unknown named references like $w are kept as literals.
+// Multi-digit group refs use greedy backtracking: try longest first,
+// falling back until single digit; if single digit has no group, it expands to "".
+func jsonataExpandTemplate(template string, numGroups int, groups []string, fullMatch string) string {
+	var buf bytes.Buffer
+	i := 0
+	for i < len(template) {
+		if template[i] != '$' {
+			buf.WriteByte(template[i])
+			i++
+			continue
+		}
+		i++ // skip '$'
+		if i >= len(template) {
+			buf.WriteByte('$')
+			break
+		}
+
+		c := template[i]
+
+		// $$ = literal '$'
+		if c == '$' {
+			buf.WriteByte('$')
+			i++
+			continue
+		}
+
+		// $0 = whole match
+		if c == '0' {
+			buf.WriteString(fullMatch)
+			i++
+			continue
+		}
+
+		// Numeric reference ($1..$N)
+		if c >= '1' && c <= '9' {
+			j := i
+			for j < len(template) && template[j] >= '0' && template[j] <= '9' {
+				j++
+			}
+			digits := template[i:j]
+			i = j
+
+			// Greedy backtracking: try longest numeric prefix that matches an existing group.
+			written := false
+			for end := len(digits); end >= 1; end-- {
+				n, _ := strconv.Atoi(digits[:end])
+				if n >= 1 && n <= numGroups {
+					buf.WriteString(groups[n-1])
+					buf.WriteString(digits[end:]) // remaining digits are literal
+					written = true
+					break
+				}
+				if end == 1 {
+					// Single digit group doesn't exist → "" + remaining digits as literal
+					buf.WriteString(digits[1:])
+					written = true
+					break
+				}
+			}
+			if !written {
+				buf.WriteString(digits)
+			}
+			continue
+		}
+
+		// Named reference (letters/underscore) → keep as literal $name
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' {
+			j := i
+			for j < len(template) && (template[j] >= 'a' && template[j] <= 'z' ||
+				template[j] >= 'A' && template[j] <= 'Z' ||
+				template[j] >= '0' && template[j] <= '9' ||
+				template[j] == '_') {
+				j++
+			}
+			buf.WriteByte('$')
+			buf.WriteString(template[i:j])
+			i = j
+			continue
+		}
+
+		// '$' followed by non-alphanumeric → literal '$'; leave current char for next iteration
+		buf.WriteByte('$')
+	}
+	return buf.String()
+}
+
+// buildMatchObject creates the match object passed to lambda replacements in $replace.
+func buildMatchObject(fullMatch string, index int, groups []string) *OrderedObject {
+	groupArr := make([]interface{}, len(groups))
+	for i, g := range groups {
+		groupArr[i] = g
+	}
+	return &OrderedObject{
+		Keys: []string{"match", "index", "groups"},
+		Values: map[string]interface{}{
+			"match":  fullMatch,
+			"index":  float64(index),
+			"groups": groupArr,
+		},
+	}
+}
+
 // fnReplace finds and replaces using regex or string pattern.
 // Signature: $replace(str, pattern, replacement [, limit])
 func fnReplace(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
@@ -1812,8 +1917,6 @@ func fnReplace(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []i
 		str = fmt.Sprint(args[0])
 	}
 
-	replacement := fmt.Sprint(args[2])
-
 	// Get limit if provided
 	limit := -1 // -1 means unlimited
 	if len(args) > 3 && args[3] != nil {
@@ -1822,27 +1925,22 @@ func fnReplace(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []i
 			return nil, err
 		}
 		limit = int(limitNum)
-		// Validate limit is not negative (except -1 which means unlimited)
-		if limit < 0 && limit != -1 {
+		if limit < 0 {
 			return nil, fmt.Errorf("D3011: limit must be non-negative")
 		}
 	}
 
-	// Get pattern (string or regex)
-	var result string
 	switch pattern := args[1].(type) {
 	case string:
 		// Validate pattern is not empty
 		if pattern == "" {
 			return nil, fmt.Errorf("D3010: pattern cannot be empty")
 		}
-
-		// Simple string replacement
+		replacement := fmt.Sprint(args[2])
 		if limit < 0 {
-			result = strings.ReplaceAll(str, pattern, replacement)
-		} else {
-			result = strings.Replace(str, pattern, replacement, limit)
+			return strings.ReplaceAll(str, pattern, replacement), nil
 		}
+		return strings.Replace(str, pattern, replacement, limit), nil
 
 	case *regexp.Regexp:
 		// Validate pattern is not empty
@@ -1850,32 +1948,71 @@ func fnReplace(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []i
 			return nil, fmt.Errorf("D3010: pattern cannot be empty")
 		}
 
-		// Regex replacement
-		if limit < 0 {
-			result = pattern.ReplaceAllString(str, replacement)
-		} else {
-			// Replace only first 'limit' occurrences
-			matches := pattern.FindAllStringIndex(str, limit)
-			if len(matches) == 0 {
-				result = str
-			} else {
-				var buf bytes.Buffer
-				lastEnd := 0
-				for _, match := range matches {
-					buf.WriteString(str[lastEnd:match[0]])
-					buf.WriteString(replacement)
-					lastEnd = match[1]
-				}
-				buf.WriteString(str[lastEnd:])
-				result = buf.String()
-			}
+		// Find all submatch indices (respects limit)
+		maxMatches := -1
+		if limit >= 0 {
+			maxMatches = limit
 		}
+		allMatches := pattern.FindAllStringSubmatchIndex(str, maxMatches)
+
+		var buf bytes.Buffer
+		lastEnd := 0
+		for _, match := range allMatches {
+			matchStart := match[0]
+			matchEnd := match[1]
+
+			// D1004: a zero-length match would cause an infinite replacement loop
+			if matchStart == matchEnd {
+				return nil, types.NewError(types.ErrZeroLengthMatch, "regular expression match did not advance position", -1)
+			}
+
+			buf.WriteString(str[lastEnd:matchStart])
+
+			fullMatch := str[matchStart:matchEnd]
+
+			// Extract capture groups
+			numGroups := (len(match) - 2) / 2
+			groups := make([]string, numGroups)
+			for j := 0; j < numGroups; j++ {
+				gStart := match[2+2*j]
+				gEnd := match[3+2*j]
+				if gStart >= 0 && gEnd >= 0 {
+					groups[j] = str[gStart:gEnd]
+				}
+				// non-participating group stays as ""
+			}
+
+			switch args[2].(type) {
+			case *Lambda, *FunctionDef:
+				matchObj := buildMatchObject(fullMatch, matchStart, groups)
+				result, err := e.callHOFFn(ctx, evalCtx, args[2], []interface{}{matchObj})
+				if err != nil {
+					return nil, err
+				}
+				if result == nil {
+					// nil = undefined → keep as empty string
+					break
+				}
+				resultStr, ok := result.(string)
+				if !ok {
+					return nil, types.NewError(types.ErrReplacementNotString, "replacement function must return a string", -1)
+				}
+				buf.WriteString(resultStr)
+			default:
+				replacement := fmt.Sprint(args[2])
+				expanded := jsonataExpandTemplate(replacement, numGroups, groups, fullMatch)
+				buf.WriteString(expanded)
+			}
+
+			lastEnd = matchEnd
+		}
+
+		buf.WriteString(str[lastEnd:])
+		return buf.String(), nil
 
 	default:
 		return nil, fmt.Errorf("pattern must be string or regex")
 	}
-
-	return result, nil
 }
 
 // --- Date/Time Functions ---
