@@ -2244,81 +2244,166 @@ func (e *Evaluator) evalSort(ctx context.Context, node *types.ASTNode, evalCtx *
 		return nil, err
 	}
 
+	// Handle undefined: return undefined
+	if sequence == nil {
+		return nil, nil
+	}
+
 	// Convert to array
-	items, err := e.toArray(sequence)
-	if err != nil {
-		return nil, fmt.Errorf("cannot sort non-array: %v", err)
+	var items []interface{}
+	switch s := sequence.(type) {
+	case []interface{}:
+		items = s
+	default:
+		// Single item, wrap as array for sorting then unwrap
+		items = []interface{}{s}
 	}
 
 	if len(items) == 0 {
 		return items, nil
 	}
 
-	// Parse the sort key expression to extract sort direction and key
-	sortKeyExpr := node.RHS
-	ascending := true
-	keyExpr := sortKeyExpr
+	// Collect sort key expressions (support both single RHS and multiple Expressions)
+	type sortSpec struct {
+		expr      *types.ASTNode
+		ascending bool
+	}
+	var sortSpecs []sortSpec
 
-	// Check for sort direction modifiers: <$ (ascending), >$ (descending)
-	if sortKeyExpr.Type == types.NodeUnary && sortKeyExpr.Value == "<" {
-		ascending = true
-		keyExpr = sortKeyExpr.LHS
-	} else if sortKeyExpr.Type == types.NodeUnary && sortKeyExpr.Value == ">" {
-		ascending = false
-		keyExpr = sortKeyExpr.LHS
+	if len(node.Expressions) > 0 {
+		// Multiple sort keys
+		for _, keyExpr := range node.Expressions {
+			ascending := true
+			key := keyExpr
+			if keyExpr.Type == types.NodeUnary && keyExpr.Value == "<" {
+				ascending = true
+				key = keyExpr.LHS
+			} else if keyExpr.Type == types.NodeUnary && keyExpr.Value == ">" {
+				ascending = false
+				key = keyExpr.LHS
+			}
+			sortSpecs = append(sortSpecs, sortSpec{expr: key, ascending: ascending})
+		}
+	} else if node.RHS != nil {
+		// Single sort key
+		sortKeyExpr := node.RHS
+		ascending := true
+		keyExpr := sortKeyExpr
+		if sortKeyExpr.Type == types.NodeUnary && sortKeyExpr.Value == "<" {
+			ascending = true
+			keyExpr = sortKeyExpr.LHS
+		} else if sortKeyExpr.Type == types.NodeUnary && sortKeyExpr.Value == ">" {
+			ascending = false
+			keyExpr = sortKeyExpr.LHS
+		}
+		sortSpecs = append(sortSpecs, sortSpec{expr: keyExpr, ascending: ascending})
 	}
 
-	// Evaluate sort keys for all items
-	type sortItem struct {
+	if len(sortSpecs) == 0 {
+		return items, nil
+	}
+
+	// Pre-evaluate all sort keys for all items
+	type itemKeys struct {
 		value interface{}
-		key   interface{}
+		keys  []interface{}
 	}
 
-	sortItems := make([]sortItem, 0, len(items))
-	for _, item := range items {
+	sortData := make([]itemKeys, len(items))
+	for idx, item := range items {
 		if item == nil {
-			sortItems = append(sortItems, sortItem{value: item, key: nil})
+			sortData[idx] = itemKeys{value: item, keys: make([]interface{}, len(sortSpecs))}
 			continue
 		}
 
 		itemCtx := evalCtx.NewChildContext(item)
-		key, err := e.evalNode(ctx, keyExpr, itemCtx)
-		if err != nil {
-			return nil, err
+		keys := make([]interface{}, len(sortSpecs))
+
+		for specIdx, spec := range sortSpecs {
+			key, err := e.evalNode(ctx, spec.expr, itemCtx)
+			if err != nil {
+				return nil, err
+			}
+			keys[specIdx] = key
 		}
 
-		sortItems = append(sortItems, sortItem{value: item, key: key})
+		sortData[idx] = itemKeys{value: item, keys: keys}
 	}
 
-	// Sort using the keys
-	sort.SliceStable(sortItems, func(i, j int) bool {
-		ki := sortItems[i].key
-		kj := sortItems[j].key
+	// Validate sort key types: all keys for a given spec must be the same type
+	// and must be strings or numbers (T2007/T2008)
+	for specIdx := range sortSpecs {
+		var firstType string
+		for _, sd := range sortData {
+			key := sd.keys[specIdx]
+			if key == nil {
+				continue
+			}
+			var keyType string
+			switch key.(type) {
+			case float64, int:
+				keyType = "number"
+			case string:
+				keyType = "string"
+			default:
+				return nil, types.NewError(types.ErrSortNotComparable, "argument to sort must be a string or number", -1)
+			}
+			if firstType == "" {
+				firstType = keyType
+			} else if firstType != keyType {
+				return nil, types.NewError(types.ErrSortMixedTypes, "sort arguments must be of the same type", -1)
+			}
+		}
+	}
 
-		// Nil values always go to the end
-		if ki == nil && kj == nil {
+	// Sort using all sort keys (stable, lexicographic on multiple keys)
+	var sortErr error
+	sort.SliceStable(sortData, func(i, j int) bool {
+		if sortErr != nil {
 			return false
 		}
-		if ki == nil {
-			return false
-		}
-		if kj == nil {
-			return true
-		}
 
-		// Compare keys
-		cmp := compareValues(ki, kj)
-		if ascending {
-			return cmp < 0
-		} else {
+		for specIdx, spec := range sortSpecs {
+			ki := sortData[i].keys[specIdx]
+			kj := sortData[j].keys[specIdx]
+
+			// Nil values go to end
+			if ki == nil && kj == nil {
+				continue
+			}
+			if ki == nil {
+				return false
+			}
+			if kj == nil {
+				return true
+			}
+
+			cmp := compareValues(ki, kj)
+			if cmp == 0 {
+				continue // Tie in this key, check next key
+			}
+
+			if spec.ascending {
+				return cmp < 0
+			}
 			return cmp > 0
 		}
+		return false // All keys equal
 	})
 
+	if sortErr != nil {
+		return nil, sortErr
+	}
+
 	// Extract sorted values
-	result := make([]interface{}, len(sortItems))
-	for i, si := range sortItems {
-		result[i] = si.value
+	result := make([]interface{}, len(sortData))
+	for i, sd := range sortData {
+		result[i] = sd.value
+	}
+
+	// Singleton unwrap: if input was single item, return single item
+	if len(result) == 1 {
+		return result[0], nil
 	}
 
 	return result, nil

@@ -1039,8 +1039,8 @@ func (p *Parser) parseApply(left *types.ASTNode) (*types.ASTNode, error) {
 }
 
 // parseSort parses a sort expression.
-// Syntax: expr^(sort-key)
-// Examples: Price^($), items^(>quantity), data^(<count)
+// Syntax: expr^(sort-key[, sort-key2, ...])
+// Examples: Price^($), items^(>quantity), data^(<count), items^(key1, key2)
 func (p *Parser) parseSort(left *types.ASTNode) (*types.ASTNode, error) {
 	pos := p.current.Position
 	p.advance() // Skip '^'
@@ -1051,23 +1051,39 @@ func (p *Parser) parseSort(left *types.ASTNode) (*types.ASTNode, error) {
 	}
 	p.advance() // Skip '('
 
-	// Parse the sort key expression
-	sortKey, err := p.parseExpression(0)
-	if err != nil {
-		return nil, err
-	}
+	// Parse sort key expressions (comma-separated)
+	var sortKeys []*types.ASTNode
 
-	// Expect closing parenthesis
-	if p.current.Type != TokenParenClose {
-		return nil, p.error("S0201", "Expected ')' in sort expression")
+	for {
+		sortKey, err := p.parseExpression(0)
+		if err != nil {
+			return nil, err
+		}
+		sortKeys = append(sortKeys, sortKey)
+
+		if p.current.Type == TokenParenClose {
+			break
+		}
+
+		// Expect comma separator between sort keys
+		if p.current.Type != TokenComma {
+			return nil, p.error("S0201", "Expected ')' in sort expression")
+		}
+		p.advance() // Skip ','
 	}
 	p.advance() // Skip ')'
 
-	// Create a NodeSort node with left expression and sort key
+	// Create a NodeSort node with left expression and sort key(s)
 	node := types.NewASTNode(types.NodeSort, pos)
-	node.LHS = left    // The sequence to sort
-	node.RHS = sortKey // The sort key expression
+	node.LHS = left // The sequence to sort
 	node.Value = "^"
+
+	if len(sortKeys) == 1 {
+		node.RHS = sortKeys[0] // Single sort key for backward compat
+	} else {
+		// Multiple sort keys: store in Expressions
+		node.Expressions = sortKeys
+	}
 
 	return node, nil
 }
