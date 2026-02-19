@@ -102,6 +102,9 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 		return e.evalBlock(ctx, node, evalCtx)
 	case types.NodeSort:
 		return e.evalSort(ctx, node, evalCtx)
+	case types.NodeTransform:
+		// Standalone transform: apply to current context data
+		return e.evalTransformNode(ctx, evalCtx.Data(), node, evalCtx)
 	case types.NodeParent:
 		return e.evalParent(node, evalCtx)
 	default:
@@ -294,8 +297,9 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 		// Apply path to each element of the array
 		result := make([]interface{}, 0, len(arr))
 		for _, item := range arr {
-			// Create context with item as data
-			itemCtx := evalCtx.NewChildContext(item)
+			// Create context with item as data, marked as array iteration context
+			// (so that % operator can find the correct parent)
+			itemCtx := evalCtx.NewArrayItemContext(item)
 
 			// Evaluate right side in item context
 			var value interface{}
@@ -1396,6 +1400,47 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 
 			return arr[index], nil
 		}
+
+		// Handle multi-index selection: when filter evaluates to an array of numbers
+		// e.g., arr[[1..3,8,-1]] selects elements at multiple indices
+		// Indices are applied in sorted order (i.e., result is in original array order)
+		if indices, ok := rhsValue.([]interface{}); ok {
+			allNumbers := true
+			for _, idx := range indices {
+				if _, isNum := idx.(float64); !isNum {
+					allNumbers = false
+					break
+				}
+			}
+			if allNumbers {
+				arr, err := e.toArray(collection)
+				if err != nil {
+					return nil, err
+				}
+				// Collect resolved indices (handling negatives), sort them
+				resolvedIndices := make([]int, 0, len(indices))
+				for _, idx := range indices {
+					index := int(idx.(float64))
+					if index < 0 {
+						index = len(arr) + index
+					}
+					if index >= 0 && index < len(arr) {
+						resolvedIndices = append(resolvedIndices, index)
+					}
+				}
+				// Sort indices to preserve original array order
+				sort.Ints(resolvedIndices)
+				// Build result in sorted index order
+				result := make([]interface{}, 0, len(resolvedIndices))
+				for _, index := range resolvedIndices {
+					result = append(result, arr[index])
+				}
+				if len(result) == 0 {
+					return nil, nil
+				}
+				return result, nil
+			}
+		}
 	}
 
 	// Check if collection is an array
@@ -1964,6 +2009,11 @@ func (e *Evaluator) evalApply(ctx context.Context, node *types.ASTNode, evalCtx 
 		return nil, err
 	}
 
+	// If RHS is a transform literal, apply the transform to the LHS data
+	if node.RHS.Type == types.NodeTransform {
+		return e.evalTransformNode(ctx, data, node.RHS, evalCtx)
+	}
+
 	// Special case: if data is a function, check for function composition
 	isDataFunction := false
 	switch data.(type) {
@@ -2421,6 +2471,193 @@ func (e *Evaluator) evalSort(ctx context.Context, node *types.ASTNode, evalCtx *
 	}
 
 	return result, nil
+}
+
+// deepClone performs a deep copy of a JSON-like value.
+// Maps and slices are cloned recursively; scalars are returned as-is (value types).
+func deepClone(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		clone := make(map[string]interface{}, len(val))
+		for k, v2 := range val {
+			clone[k] = deepClone(v2)
+		}
+		return clone
+	case *OrderedObject:
+		clone := &OrderedObject{
+			Keys:   make([]string, len(val.Keys)),
+			Values: make(map[string]interface{}, len(val.Values)),
+		}
+		copy(clone.Keys, val.Keys)
+		for k, v2 := range val.Values {
+			clone.Values[k] = deepClone(v2)
+		}
+		return clone
+	case []interface{}:
+		clone := make([]interface{}, len(val))
+		for i, v2 := range val {
+			clone[i] = deepClone(v2)
+		}
+		return clone
+	default:
+		return val // scalars (nil, bool, float64, string, etc.) are value types
+	}
+}
+
+// applyUpdateToMap merges the update object into a map[string]interface{}.
+// The update is evaluated in the context of the matched node.
+func applyUpdateToMap(target map[string]interface{}, update interface{}) {
+	switch uv := update.(type) {
+	case map[string]interface{}:
+		for k, v := range uv {
+			target[k] = v
+		}
+	case *OrderedObject:
+		for _, k := range uv.Keys {
+			target[k] = uv.Values[k]
+		}
+	}
+}
+
+// applyDeleteToMap removes fields from a map[string]interface{} based on the delete expression result.
+func applyDeleteToMap(target map[string]interface{}, del interface{}) {
+	switch dv := del.(type) {
+	case string:
+		delete(target, dv)
+	case []interface{}:
+		for _, d := range dv {
+			if s, ok := d.(string); ok {
+				delete(target, s)
+			}
+		}
+	}
+}
+
+// evalTransformNode applies a NodeTransform expression to data.
+// Used both as a standalone transform and when piped via ~>.
+func (e *Evaluator) evalTransformNode(ctx context.Context, data interface{}, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	if data == nil {
+		return nil, nil
+	}
+
+	// Deep clone the data to avoid mutating the original
+	cloned := deepClone(data)
+
+	path := node.LHS   // path expression to locate matching nodes
+	update := node.RHS // update object expression
+	var delExpr *types.ASTNode
+	if len(node.Expressions) > 0 {
+		delExpr = node.Expressions[0]
+	}
+
+	// Evaluate path expression on the cloned data to get matching nodes.
+	// Since Go maps are reference types, these are aliases into the cloned tree.
+	rootCtx := evalCtx.NewChildContext(cloned)
+	matches, err := e.evalNode(ctx, path, rootCtx)
+	if err != nil {
+		// Path doesn't match anything – no transformation needed
+		return cloned, nil
+	}
+	if matches == nil {
+		return cloned, nil
+	}
+
+	// Normalize to slice
+	var matchList []interface{}
+	switch mv := matches.(type) {
+	case []interface{}:
+		matchList = mv
+	default:
+		matchList = []interface{}{mv}
+	}
+
+	// Apply update/delete to each matched node
+	for _, matchedNode := range matchList {
+		// Evaluate update expression in context of matched node
+		matchCtx := evalCtx.NewChildContext(matchedNode)
+		updateVal, err := e.evalNode(ctx, update, matchCtx)
+		if err != nil {
+			return nil, err
+		}
+		if updateVal != nil {
+			// Validate update is an object (T2011)
+			switch updateVal.(type) {
+			case map[string]interface{}, *OrderedObject:
+				// OK
+			default:
+				return nil, types.NewError(types.ErrTransformUpdateNotObj, "the second argument of the transform expression must be an object", -1)
+			}
+		}
+
+		// Gather fields to delete
+		var delFields []string
+		if delExpr != nil {
+			delVal, _ := e.evalNode(ctx, delExpr, matchCtx)
+			if delVal != nil {
+				switch dv := delVal.(type) {
+				case string:
+					delFields = []string{dv}
+				case []interface{}:
+					for _, d := range dv {
+						if s, ok := d.(string); ok {
+							delFields = append(delFields, s)
+						}
+					}
+				default:
+					_ = dv
+					return nil, types.NewError(types.ErrTransformDeleteNotArr, "the third argument of the transform expression must be an array of strings", -1)
+				}
+			}
+		}
+
+		// Apply to map[string]interface{}
+		if matchedMap, ok := matchedNode.(map[string]interface{}); ok {
+			if updateVal != nil {
+				applyUpdateToMap(matchedMap, updateVal)
+			}
+			for _, f := range delFields {
+				delete(matchedMap, f)
+			}
+			continue
+		}
+
+		// Apply to *OrderedObject
+		if matchedObj, ok := matchedNode.(*OrderedObject); ok {
+			if updateVal != nil {
+				switch uv := updateVal.(type) {
+				case map[string]interface{}:
+					for k, v := range uv {
+						if _, exists := matchedObj.Values[k]; !exists {
+							matchedObj.Keys = append(matchedObj.Keys, k)
+						}
+						matchedObj.Values[k] = v
+					}
+				case *OrderedObject:
+					for _, k := range uv.Keys {
+						if _, exists := matchedObj.Values[k]; !exists {
+							matchedObj.Keys = append(matchedObj.Keys, k)
+						}
+						matchedObj.Values[k] = uv.Values[k]
+					}
+				}
+			}
+			for _, f := range delFields {
+				if _, exists := matchedObj.Values[f]; exists {
+					delete(matchedObj.Values, f)
+					// Remove from Keys slice
+					newKeys := matchedObj.Keys[:0]
+					for _, k := range matchedObj.Keys {
+						if k != f {
+							newKeys = append(newKeys, k)
+						}
+					}
+					matchedObj.Keys = newKeys
+				}
+			}
+		}
+	}
+
+	return cloned, nil
 }
 
 // callLambda calls a lambda function with the given arguments.
@@ -3148,10 +3385,19 @@ func (e *Evaluator) opIn(left, right interface{}) (interface{}, error) {
 // evalParent evaluates the parent operator (%).
 // Returns the parent context's data.
 func (e *Evaluator) evalParent(node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	if evalCtx == nil || evalCtx.Parent() == nil {
-		return nil, nil // No parent context
+	// Walk up context chain looking for a context that was created as an array item.
+	// Only valid when inside a path that iterates over array elements.
+	for ctx := evalCtx; ctx != nil; ctx = ctx.Parent() {
+		if ctx.IsArrayItem() {
+			// The parent of the array item context is the containing object
+			if ctx.Parent() != nil {
+				return ctx.Parent().Data(), nil
+			}
+			return nil, nil
+		}
 	}
-	return evalCtx.Parent().Data(), nil
+	// No array iteration context found — % is invalid here
+	return nil, types.NewError(types.ErrInvalidParentUse, "The % operator can only be used within a path that is a member of an array", node.Position)
 }
 
 // compareValues compares two values and returns:

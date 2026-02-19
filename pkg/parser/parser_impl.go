@@ -214,6 +214,8 @@ func (p *Parser) parsePrefix() (*types.ASTNode, error) {
 		return p.parseWildcard()
 	case TokenRegex:
 		return p.parseRegex()
+	case TokenPipe:
+		return p.parseTransform()
 	case TokenAnd, TokenOr, TokenIn:
 		// Keywords can also be used as field names (e.g., 'and', 'or', 'in')
 		// Treat them as names when in prefix position
@@ -662,6 +664,11 @@ func (p *Parser) parsePath(left *types.ASTNode) (*types.ASTNode, error) {
 	node.LHS = left
 	node.RHS = right
 
+	// Reject numeric path steps: $.7, $.123 etc. are invalid in JSONata
+	if right != nil && right.Type == types.NodeNumber {
+		return nil, p.error(types.ErrInvalidPathStep, "an attempt to lookup a field that starts with a digit is not supported")
+	}
+
 	// Propagate KeepArray flag from left side (e.g., from $[] syntax)
 	//This ensures array structure is preserved through path chains
 	if left.KeepArray {
@@ -820,13 +827,10 @@ func (p *Parser) parseFunctionCall(nameNode *types.ASTNode) (*types.ASTNode, err
 
 	node := types.NewASTNode(types.NodeFunction, pos)
 
-	// For named function calls (name without $), use Value for built-in function lookup.
-	// For all other expressions (lambda, variable, function-result, etc.), use LHS.
-	if nameNode.Type == types.NodeName {
-		node.Value = nameNode.Value // Function name (string)
-	} else {
-		node.LHS = nameNode // Lambda, variable, function-result, or other expression to call
-	}
+	// For all expressions (lambda, variable, function-result, name, etc.), use LHS.
+	// Note: bare names like string(2) should NOT resolve to built-ins — only $string(2) does.
+	// This is consistent with JSONata spec where all built-in functions use $ prefix.
+	node.LHS = nameNode
 
 	node.Arguments = []*types.ASTNode{}
 	hasPlaceholder := false
@@ -1164,4 +1168,51 @@ func operatorString(tt TokenType) string {
 	default:
 		return tt.String()
 	}
+}
+
+// parseTransform parses a transform literal expression.
+// Syntax: |path|update[, deletions]|
+func (p *Parser) parseTransform() (*types.ASTNode, error) {
+	pos := p.current.Position
+	p.advance() // Skip opening '|'
+
+	// Parse path expression
+	path, err := p.parseExpression(0)
+	if err != nil {
+		return nil, err
+	}
+
+	// Expect '|'
+	if p.current.Type != TokenPipe {
+		return nil, p.error("S0201", "Expected '|' in transform expression")
+	}
+	p.advance() // Skip '|'
+
+	// Parse update expression
+	update, err := p.parseExpression(0)
+	if err != nil {
+		return nil, err
+	}
+
+	node := types.NewASTNode(types.NodeTransform, pos)
+	node.LHS = path   // path expression
+	node.RHS = update // update expression
+
+	// Check for optional delete expression
+	if p.current.Type == TokenComma {
+		p.advance() // Skip ','
+		del, err := p.parseExpression(0)
+		if err != nil {
+			return nil, err
+		}
+		node.Expressions = []*types.ASTNode{del}
+	}
+
+	// Expect closing '|'
+	if p.current.Type != TokenPipe {
+		return nil, p.error("S0201", "Expected closing '|' in transform expression")
+	}
+	p.advance() // Skip '|'
+
+	return node, nil
 }

@@ -16,6 +16,8 @@ const (
 	ErrSyntaxError       ErrorCode = "S0201"
 	ErrExpectedToken     ErrorCode = "S0202"
 	ErrExpectedKeyword   ErrorCode = "S0203"
+	ErrInvalidPathStep   ErrorCode = "S0213" // digit field name after dot
+	ErrInvalidParentUse  ErrorCode = "S0217" // parent operator (%) in invalid context
 	ErrEmptyRegex        ErrorCode = "S0301"
 	ErrRegexNotClosed    ErrorCode = "S0302"
 	// T0xxx: Type errors
@@ -23,11 +25,15 @@ const (
 	ErrCannotConvertNumber   ErrorCode = "T1001"
 	ErrCannotConvertString   ErrorCode = "T1002"
 	ErrInvalidTypeOperation  ErrorCode = "T1003"
+
+	// T2xxx: Operator type errors
 	ErrLeftSideAssignment    ErrorCode = "T2001"
 	ErrRangeStartNotInteger  ErrorCode = "T2003"
 	ErrRangeEndNotInteger    ErrorCode = "T2004"
 	ErrSortNotComparable     ErrorCode = "T2007"
 	ErrSortMixedTypes        ErrorCode = "T2008"
+	ErrTransformUpdateNotObj ErrorCode = "T2011"
+	ErrTransformDeleteNotArr ErrorCode = "T2012"
 
 	// D0xxx: Evaluation errors
 	ErrNumberTooLarge         ErrorCode = "D1001"

@@ -20,6 +20,10 @@ type EvalContext struct {
 
 	// depth tracks recursion depth to prevent stack overflow
 	depth int
+
+	// isArrayItem marks this context as created during array iteration in a path.
+	// Only contexts created this way are valid targets for the % (parent) operator.
+	isArrayItem bool
 }
 
 // NewContext creates a new evaluation context.
@@ -44,6 +48,24 @@ func (c *EvalContext) NewChildContext(data interface{}) *EvalContext {
 		bindings: make(map[string]interface{}),
 		depth:    c.depth + 1,
 	}
+}
+
+// NewArrayItemContext creates a child context for array iteration.
+// Contexts created this way are valid targets for the % (parent) operator.
+func (c *EvalContext) NewArrayItemContext(data interface{}) *EvalContext {
+	return &EvalContext{
+		data:        data,
+		parent:      c,
+		root:        c.root,
+		bindings:    make(map[string]interface{}),
+		depth:       c.depth + 1,
+		isArrayItem: true,
+	}
+}
+
+// IsArrayItem returns whether this context was created during array iteration.
+func (c *EvalContext) IsArrayItem() bool {
+	return c.isArrayItem
 }
 
 // Data returns the current context data.
