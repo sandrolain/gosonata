@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/sandrolain/gosonata/pkg/parser"
 	"github.com/sandrolain/gosonata/pkg/types"
 )
 
@@ -2720,4 +2721,33 @@ func fnSubstringAfter(ctx context.Context, e *Evaluator, evalCtx *EvalContext, a
 	}
 
 	return str[idx+len(separator):], nil
+}
+
+// fnEval evaluates a JSONata expression string in the current context.
+// $eval(expr[, bindings])
+func fnEval(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	// Undefined input → undefined
+	if len(args) == 0 || args[0] == nil {
+		return nil, nil
+	}
+
+	exprStr, ok := args[0].(string)
+	if !ok {
+		return nil, nil
+	}
+
+	// Parse the expression string
+	parsed, err := parser.Parse(exprStr)
+	if err != nil {
+		return nil, err
+	}
+
+	// If bindings/context are provided as second arg, use as data context
+	if len(args) >= 2 && args[1] != nil {
+		// Second argument is the data context for the evaluated expression
+		return e.Eval(ctx, parsed, args[1])
+	}
+
+	// Evaluate in the current data context, inheriting current bindings
+	return e.Eval(ctx, parsed, evalCtx.Data())
 }

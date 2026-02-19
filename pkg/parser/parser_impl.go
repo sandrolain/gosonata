@@ -814,7 +814,7 @@ func (p *Parser) parseFunctionCall(nameNode *types.ASTNode) (*types.ASTNode, err
 
 	node := types.NewASTNode(types.NodeFunction, pos)
 
-	// For named function calls (name), use Value to store the name for built-in lookup.
+	// For named function calls (name without $), use Value for built-in function lookup.
 	// For all other expressions (lambda, variable, function-result, etc.), use LHS.
 	if nameNode.Type == types.NodeName {
 		node.Value = nameNode.Value // Function name (string)

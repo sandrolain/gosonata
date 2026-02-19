@@ -1887,32 +1887,36 @@ func (e *Evaluator) evalRange(ctx context.Context, node *types.ASTNode, evalCtx 
 		return nil, err
 	}
 
+	// Validate types: only integer numbers are allowed in ranges
+	// T2003: start must be integer number (if not nil)
+	if startVal != nil {
+		startFloat, startOk := startVal.(float64)
+		if !startOk {
+			return nil, types.NewError(types.ErrRangeStartNotInteger, "start of range expression must evaluate to an integer", -1)
+		}
+		if startFloat != math.Trunc(startFloat) {
+			return nil, types.NewError(types.ErrRangeStartNotInteger, "start of range expression must evaluate to an integer", -1)
+		}
+	}
+
+	// T2004: end must be integer number (if not nil)
+	if endVal != nil {
+		endFloat, endOk := endVal.(float64)
+		if !endOk {
+			return nil, types.NewError(types.ErrRangeEndNotInteger, "end of range expression must evaluate to an integer", -1)
+		}
+		if endFloat != math.Trunc(endFloat) {
+			return nil, types.NewError(types.ErrRangeEndNotInteger, "end of range expression must evaluate to an integer", -1)
+		}
+	}
+
 	// If either bound is undefined (nil), return empty array per JSONata spec
 	if startVal == nil || endVal == nil {
 		return []interface{}{}, nil
 	}
 
-	// Validate types: only integer numbers are allowed in ranges
-	// T2003: start must be integer number
-	startFloat, startOk := startVal.(float64)
-	if !startOk {
-		return nil, types.NewError(types.ErrRangeStartNotInteger, "start of range expression must evaluate to an integer", -1)
-	}
-	if startFloat != math.Trunc(startFloat) {
-		return nil, types.NewError(types.ErrRangeStartNotInteger, "start of range expression must evaluate to an integer", -1)
-	}
-
-	// T2004: end must be integer number
-	endFloat, endOk := endVal.(float64)
-	if !endOk {
-		return nil, types.NewError(types.ErrRangeEndNotInteger, "end of range expression must evaluate to an integer", -1)
-	}
-	if endFloat != math.Trunc(endFloat) {
-		return nil, types.NewError(types.ErrRangeEndNotInteger, "end of range expression must evaluate to an integer", -1)
-	}
-
-	start := int64(startFloat)
-	end := int64(endFloat)
+	start := int64(startVal.(float64))
+	end := int64(endVal.(float64))
 
 	// Per JSONata spec: if start > end, range is empty
 	if start > end {
