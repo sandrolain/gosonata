@@ -18,7 +18,6 @@ const (
 	ErrExpectedKeyword   ErrorCode = "S0203"
 	ErrEmptyRegex        ErrorCode = "S0301"
 	ErrRegexNotClosed    ErrorCode = "S0302"
-
 	// T0xxx: Type errors
 	ErrArgumentCountMismatch ErrorCode = "T0410"
 	ErrCannotConvertNumber   ErrorCode = "T1001"

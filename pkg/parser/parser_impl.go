@@ -234,8 +234,14 @@ func (p *Parser) parseInfix(left *types.ASTNode) (*types.ASTNode, error) {
 	case TokenDescendent:
 		return p.parseDescendent(left)
 	case TokenBracketOpen:
+		if left.IsGrouping {
+			return nil, p.error("S0209", "a predicate cannot follow a grouping expression in a step")
+		}
 		return p.parseFilter(left)
 	case TokenBraceOpen:
+		if left.IsGrouping {
+			return nil, p.error("S0210", "each operator cannot follow a grouping expression in a step")
+		}
 		return p.parseObjectConstructorWithLeft(left)
 	case TokenParenOpen:
 		// Function call: any expression that could evaluate to a function can be called

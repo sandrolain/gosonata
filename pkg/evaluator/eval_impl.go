@@ -93,7 +93,7 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 	case types.NodeFunction:
 		return e.evalFunction(ctx, node, evalCtx)
 	case types.NodePartial:
-		return e.evalPartial(node, evalCtx)
+		return e.evalPartial(ctx, node, evalCtx)
 	case types.NodeLambda:
 		return e.evalLambda(node, evalCtx)
 	case types.NodeBind:
@@ -1653,7 +1653,7 @@ func (e *Evaluator) evalLambda(node *types.ASTNode, evalCtx *EvalContext) (inter
 // evalPartial creates a partial application lambda.
 // When a function is called with placeholder arguments (?), it returns a new
 // lambda that accepts values for those placeholders.
-func (e *Evaluator) evalPartial(node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+func (e *Evaluator) evalPartial(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
 	// Count placeholders and build parameter list
 	placeholderCount := 0
 	for _, arg := range node.Arguments {
@@ -1664,7 +1664,7 @@ func (e *Evaluator) evalPartial(node *types.ASTNode, evalCtx *EvalContext) (inte
 
 	if placeholderCount == 0 {
 		// No placeholders - should not happen, but treat as regular function call
-		return e.evalFunction(context.Background(), node, evalCtx)
+		return e.evalFunction(ctx, node, evalCtx)
 	}
 
 	// Check if partial application is allowed
@@ -1684,6 +1684,20 @@ func (e *Evaluator) evalPartial(node *types.ASTNode, evalCtx *EvalContext) (inte
 
 		// Function exists but partial application is not supported for direct calls
 		return nil, types.NewError("T1007", "partial application can only be applied to a function", node.Position)
+	}
+
+	// When LHS is set, evaluate it to check if it's callable
+	if node.LHS != nil {
+		lhsVal, err := e.evalNode(ctx, node.LHS, evalCtx)
+		if err != nil {
+			return nil, err
+		}
+		switch lhsVal.(type) {
+		case *Lambda, *FunctionDef:
+			// OK, callable
+		default:
+			return nil, types.NewError("T1007", "partial application can only be applied to a function", node.Position)
+		}
 	}
 
 	// Create parameter names for the lambda ($1, $2, $3, ...)
@@ -2330,19 +2344,15 @@ func (e *Evaluator) evalSort(ctx context.Context, node *types.ASTNode, evalCtx *
 		sortData[idx] = itemKeys{value: item, keys: keys}
 	}
 
-	// Validate sort key types: all keys for a given spec must be the same type
-	// and must be strings or numbers (T2007/T2008). Null keys cause T2008.
+	// Validate sort key types: all non-nil keys for a given spec must be the same type
+	// and must be strings or numbers (T2007/T2008). Nil keys sort last (treated as undefined).
 	for specIdx := range sortSpecs {
 		var firstType string
-		var hasNonNull bool
-		var hasNull bool
 		for _, sd := range sortData {
 			key := sd.keys[specIdx]
 			if key == nil {
-				hasNull = true
-				continue
+				continue // nil sorts last, no error
 			}
-			hasNonNull = true
 			var keyType string
 			switch key.(type) {
 			case float64, int:
@@ -2357,10 +2367,6 @@ func (e *Evaluator) evalSort(ctx context.Context, node *types.ASTNode, evalCtx *
 			} else if firstType != keyType {
 				return nil, types.NewError(types.ErrSortMixedTypes, "sort arguments must be of the same type", -1)
 			}
-		}
-		// Null mixed with non-null values is T2008
-		if hasNull && hasNonNull {
-			return nil, types.NewError(types.ErrSortMixedTypes, "sort arguments must be of the same type", -1)
 		}
 	}
 
