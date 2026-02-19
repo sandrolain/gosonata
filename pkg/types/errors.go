@@ -25,11 +25,16 @@ const (
 	ErrCannotConvertString   ErrorCode = "T1002"
 	ErrInvalidTypeOperation  ErrorCode = "T1003"
 	ErrLeftSideAssignment    ErrorCode = "T2001"
+	ErrRangeStartNotInteger  ErrorCode = "T2003"
+	ErrRangeEndNotInteger    ErrorCode = "T2004"
+	ErrSortNotComparable     ErrorCode = "T2007"
+	ErrSortMixedTypes        ErrorCode = "T2008"
 
 	// D0xxx: Evaluation errors
 	ErrNumberTooLarge         ErrorCode = "D1001"
 	ErrInvokeNonFunction      ErrorCode = "D1002"
 	ErrLeftSideRange          ErrorCode = "D2001"
+	ErrRangeTooLarge          ErrorCode = "D2014"
 	ErrSerializeNonFinite     ErrorCode = "D3001"
 	ErrRecursiveDefinition    ErrorCode = "D3010"
 	ErrStackOverflow          ErrorCode = "D3020"

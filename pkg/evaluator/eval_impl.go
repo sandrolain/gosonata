@@ -1887,27 +1887,49 @@ func (e *Evaluator) evalRange(ctx context.Context, node *types.ASTNode, evalCtx 
 		return nil, err
 	}
 
-	// Convert to numbers
-	start, err := e.toNumber(startVal)
-	if err != nil {
-		return nil, fmt.Errorf("range start must be a number: %v", err)
+	// If either bound is undefined (nil), return empty array per JSONata spec
+	if startVal == nil || endVal == nil {
+		return []interface{}{}, nil
 	}
 
-	end, err := e.toNumber(endVal)
-	if err != nil {
-		return nil, fmt.Errorf("range end must be a number: %v", err)
+	// Validate types: only integer numbers are allowed in ranges
+	// T2003: start must be integer number
+	startFloat, startOk := startVal.(float64)
+	if !startOk {
+		return nil, types.NewError(types.ErrRangeStartNotInteger, "start of range expression must evaluate to an integer", -1)
+	}
+	if startFloat != math.Trunc(startFloat) {
+		return nil, types.NewError(types.ErrRangeStartNotInteger, "start of range expression must evaluate to an integer", -1)
 	}
 
-	// Generate range
-	result := make([]interface{}, 0)
-	if start <= end {
-		for i := int(start); i <= int(end); i++ {
-			result = append(result, float64(i))
-		}
-	} else {
-		for i := int(start); i >= int(end); i-- {
-			result = append(result, float64(i))
-		}
+	// T2004: end must be integer number
+	endFloat, endOk := endVal.(float64)
+	if !endOk {
+		return nil, types.NewError(types.ErrRangeEndNotInteger, "end of range expression must evaluate to an integer", -1)
+	}
+	if endFloat != math.Trunc(endFloat) {
+		return nil, types.NewError(types.ErrRangeEndNotInteger, "end of range expression must evaluate to an integer", -1)
+	}
+
+	start := int64(startFloat)
+	end := int64(endFloat)
+
+	// Per JSONata spec: if start > end, range is empty
+	if start > end {
+		return []interface{}{}, nil
+	}
+
+	// D2014: range too large (> 10,000,000 elements)
+	const maxRangeSize = 10_000_000
+	if end-start >= maxRangeSize {
+		return nil, types.NewError(types.ErrRangeTooLarge, "the size of the sequence allocated by the range expression exceeds the built-in limit", -1)
+	}
+
+	// Generate range (ascending only, start <= end guaranteed above)
+	size := int(end-start) + 1
+	result := make([]interface{}, size)
+	for i := 0; i < size; i++ {
+		result[i] = float64(start) + float64(i)
 	}
 
 	return result, nil
@@ -2648,91 +2670,138 @@ func (e *Evaluator) cleanFloatingPointArtifacts(str string, rounded float64) str
 
 // Arithmetic operators
 
+// requireNumericOperand validates that a value is a numeric type for arithmetic operations.
+// Returns T2001 error for non-numeric types (bool, string, object, etc.).
+func requireNumericOperand(value interface{}) error {
+	if value == nil {
+		return nil // nil (undefined) is allowed - propagates
+	}
+	switch value.(type) {
+	case float64, int:
+		return nil // numeric types OK
+	default:
+		return types.NewError(types.ErrLeftSideAssignment, fmt.Sprintf("left %T operand of arithmetic operation must be a number", value), -1)
+	}
+}
+
+// checkArithmeticResult validates that an arithmetic result is a finite number.
+// Returns D1001 error for NaN, +Infinity, or -Infinity.
+func checkArithmeticResult(result float64) error {
+	if math.IsNaN(result) || math.IsInf(result, 0) {
+		return types.NewError(types.ErrNumberTooLarge, "number out of range", -1)
+	}
+	return nil
+}
+
 func (e *Evaluator) opAdd(left, right interface{}) (interface{}, error) {
+	// Validate operand types (T2001 for non-numeric non-nil)
+	if err := requireNumericOperand(left); err != nil {
+		return nil, err
+	}
+	if err := requireNumericOperand(right); err != nil {
+		return nil, err
+	}
 	// Propagate undefined
 	if left == nil || right == nil {
 		return nil, nil
 	}
-	l, err := e.toNumber(left)
-	if err != nil {
+	l, _ := e.toNumber(left)
+	r, _ := e.toNumber(right)
+	result := l + r
+	if err := checkArithmeticResult(result); err != nil {
 		return nil, err
 	}
-	r, err := e.toNumber(right)
-	if err != nil {
-		return nil, err
-	}
-	return l + r, nil
+	return result, nil
 }
 
 func (e *Evaluator) opSubtract(left, right interface{}) (interface{}, error) {
+	// Validate operand types (T2001 for non-numeric non-nil)
+	if err := requireNumericOperand(left); err != nil {
+		return nil, err
+	}
+	if err := requireNumericOperand(right); err != nil {
+		return nil, err
+	}
 	// Propagate undefined
 	if left == nil || right == nil {
 		return nil, nil
 	}
-	l, err := e.toNumber(left)
-	if err != nil {
+	l, _ := e.toNumber(left)
+	r, _ := e.toNumber(right)
+	result := l - r
+	if err := checkArithmeticResult(result); err != nil {
 		return nil, err
 	}
-	r, err := e.toNumber(right)
-	if err != nil {
-		return nil, err
-	}
-	return l - r, nil
+	return result, nil
 }
 
 func (e *Evaluator) opMultiply(left, right interface{}) (interface{}, error) {
+	// Validate operand types (T2001 for non-numeric non-nil)
+	if err := requireNumericOperand(left); err != nil {
+		return nil, err
+	}
+	if err := requireNumericOperand(right); err != nil {
+		return nil, err
+	}
 	// Propagate undefined
 	if left == nil || right == nil {
 		return nil, nil
 	}
-	l, err := e.toNumber(left)
-	if err != nil {
+	l, _ := e.toNumber(left)
+	r, _ := e.toNumber(right)
+	result := l * r
+	if err := checkArithmeticResult(result); err != nil {
 		return nil, err
 	}
-	r, err := e.toNumber(right)
-	if err != nil {
-		return nil, err
-	}
-	return l * r, nil
+	return result, nil
 }
 
 func (e *Evaluator) opDivide(left, right interface{}) (interface{}, error) {
+	// Validate operand types (T2001 for non-numeric non-nil)
+	if err := requireNumericOperand(left); err != nil {
+		return nil, err
+	}
+	if err := requireNumericOperand(right); err != nil {
+		return nil, err
+	}
 	// Propagate undefined
 	if left == nil || right == nil {
 		return nil, nil
 	}
-	l, err := e.toNumber(left)
-	if err != nil {
-		return nil, err
-	}
-	r, err := e.toNumber(right)
-	if err != nil {
-		return nil, err
-	}
+	l, _ := e.toNumber(left)
+	r, _ := e.toNumber(right)
 	if r == 0 {
-		// Division by zero produces infinity
-		return math.Inf(1), nil
+		return nil, types.NewError(types.ErrNumberTooLarge, "division by zero", -1)
 	}
-	return l / r, nil
+	result := l / r
+	if err := checkArithmeticResult(result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (e *Evaluator) opModulo(left, right interface{}) (interface{}, error) {
+	// Validate operand types (T2001 for non-numeric non-nil)
+	if err := requireNumericOperand(left); err != nil {
+		return nil, err
+	}
+	if err := requireNumericOperand(right); err != nil {
+		return nil, err
+	}
 	// Propagate undefined
 	if left == nil || right == nil {
 		return nil, nil
 	}
-	l, err := e.toNumber(left)
-	if err != nil {
-		return nil, err
-	}
-	r, err := e.toNumber(right)
-	if err != nil {
-		return nil, err
-	}
+	l, _ := e.toNumber(left)
+	r, _ := e.toNumber(right)
 	if r == 0 {
 		return nil, fmt.Errorf("modulo by zero")
 	}
-	return math.Mod(l, r), nil
+	result := math.Mod(l, r)
+	if err := checkArithmeticResult(result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (e *Evaluator) opNegate(operand interface{}) (interface{}, error) {

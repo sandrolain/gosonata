@@ -143,6 +143,7 @@ func initBuiltinFunctions() {
 			"spread": {Name: "spread", MinArgs: 1, MaxArgs: 1, Impl: fnSpread},
 			"error":  {Name: "error", MinArgs: 0, MaxArgs: 1, Impl: fnError},
 			"assert": {Name: "assert", MinArgs: 1, MaxArgs: 2, Impl: fnAssert},
+			"eval":   {Name: "eval", MinArgs: 0, MaxArgs: 2, Impl: fnEval},
 
 			// Regex functions
 			"match":   {Name: "match", MinArgs: 2, MaxArgs: 3, Impl: fnMatch},
