@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"reflect"
@@ -2563,7 +2564,12 @@ func (e *Evaluator) toString(value interface{}) string {
 		}
 		return "false"
 	default:
-		return fmt.Sprintf("%v", value)
+		// Arrays, objects, and other types: serialize as JSON
+		b, err := json.Marshal(value)
+		if err != nil {
+			return fmt.Sprintf("%v", value)
+		}
+		return string(b)
 	}
 }
 
