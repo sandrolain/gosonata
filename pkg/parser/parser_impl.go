@@ -238,11 +238,8 @@ func (p *Parser) parseInfix(left *types.ASTNode) (*types.ASTNode, error) {
 	case TokenBraceOpen:
 		return p.parseObjectConstructorWithLeft(left)
 	case TokenParenOpen:
-		// Function call: name(...) or $var(...) or lambda(...)
-		if left.Type == types.NodeName || left.Type == types.NodeVariable || left.Type == types.NodeLambda {
-			return p.parseFunctionCall(left)
-		}
-		return nil, p.error("S0201", "Unexpected '(' after non-function expression")
+		// Function call: any expression that could evaluate to a function can be called
+		return p.parseFunctionCall(left)
 	case TokenCondition:
 		return p.parseConditional(left)
 	case TokenRange:
@@ -817,12 +814,12 @@ func (p *Parser) parseFunctionCall(nameNode *types.ASTNode) (*types.ASTNode, err
 
 	node := types.NewASTNode(types.NodeFunction, pos)
 
-	// For lambda and variable calls, save the node in LHS
-	// For named functions, save the name in Value
-	if nameNode.Type == types.NodeLambda || nameNode.Type == types.NodeVariable {
-		node.LHS = nameNode // Lambda or variable to call
-	} else {
+	// For named function calls (name), use Value to store the name for built-in lookup.
+	// For all other expressions (lambda, variable, function-result, etc.), use LHS.
+	if nameNode.Type == types.NodeName {
 		node.Value = nameNode.Value // Function name (string)
+	} else {
+		node.LHS = nameNode // Lambda, variable, function-result, or other expression to call
 	}
 
 	node.Arguments = []*types.ASTNode{}

@@ -96,6 +96,7 @@ func initBuiltinFunctions() {
 			"map":      {Name: "map", MinArgs: 2, MaxArgs: 2, Impl: fnMap},
 			"filter":   {Name: "filter", MinArgs: 2, MaxArgs: 2, Impl: fnFilter},
 			"reduce":   {Name: "reduce", MinArgs: 2, MaxArgs: 3, Impl: fnReduce},
+			"single":   {Name: "single", MinArgs: 1, MaxArgs: 2, Impl: fnSingle},
 			"sort":     {Name: "sort", MinArgs: 1, MaxArgs: 2, Impl: fnSort},
 			"append":   {Name: "append", MinArgs: 2, MaxArgs: 2, Impl: fnAppend},
 			"reverse":  {Name: "reverse", MinArgs: 1, MaxArgs: 1, Impl: fnReverse},
@@ -315,43 +316,77 @@ func fnMax(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inter
 
 // --- Array Functions ---
 
+// callHOFFn calls a HOF function (Lambda or FunctionDef) with the provided args.
+// For Lambda: trims args to match the number of lambda params.
+// For FunctionDef: passes all args.
+func (e *Evaluator) callHOFFn(ctx context.Context, evalCtx *EvalContext, fn interface{}, args []interface{}) (interface{}, error) {
+	switch f := fn.(type) {
+	case *Lambda:
+		callArgs := args
+		if len(f.Params) > 0 && len(f.Params) < len(args) {
+			callArgs = args[:len(f.Params)]
+		}
+		return e.callLambda(ctx, f, callArgs)
+	case *FunctionDef:
+		// Trim to MaxArgs if specified
+		callArgs := args
+		if f.MaxArgs > 0 && len(callArgs) > f.MaxArgs {
+			callArgs = callArgs[:f.MaxArgs]
+		}
+		return f.Impl(ctx, e, evalCtx, callArgs)
+	default:
+		return nil, fmt.Errorf("expected a function, got %T", fn)
+	}
+}
+
 func fnMap(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
 	arr, err := e.toArray(args[0])
 	if err != nil {
 		return nil, err
 	}
-
-	lambda, ok := args[1].(*Lambda)
-	if !ok {
+	if args[1] == nil {
 		return nil, fmt.Errorf("second argument to $map must be a function")
 	}
 
 	result := make([]interface{}, 0, len(arr))
-	for _, item := range arr {
-		value, err := e.callLambda(ctx, lambda, []interface{}{item})
+	for i, item := range arr {
+		value, err := e.callHOFFn(ctx, evalCtx, args[1], []interface{}{item, float64(i), arr})
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, value)
+		// Exclude undefined (nil) results - JSONata sequence semantics
+		if value != nil {
+			result = append(result, value)
+		}
 	}
 
+	if len(result) == 0 {
+		return nil, nil
+	}
+	if len(result) == 1 {
+		return result[0], nil
+	}
 	return result, nil
 }
 
 func fnFilter(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
 	arr, err := e.toArray(args[0])
 	if err != nil {
 		return nil, err
 	}
-
-	lambda, ok := args[1].(*Lambda)
-	if !ok {
+	if args[1] == nil {
 		return nil, fmt.Errorf("second argument to $filter must be a function")
 	}
 
 	result := make([]interface{}, 0)
-	for _, item := range arr {
-		value, err := e.callLambda(ctx, lambda, []interface{}{item})
+	for i, item := range arr {
+		value, err := e.callHOFFn(ctx, evalCtx, args[1], []interface{}{item, float64(i), arr})
 		if err != nil {
 			return nil, err
 		}
@@ -360,22 +395,45 @@ func fnFilter(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 		}
 	}
 
+	if len(result) == 0 {
+		return nil, nil
+	}
+	if len(result) == 1 {
+		return result[0], nil
+	}
 	return result, nil
 }
 
 func fnReduce(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		if len(args) >= 3 {
+			return args[2], nil
+		}
+		return nil, nil
+	}
 	arr, err := e.toArray(args[0])
 	if err != nil {
 		return nil, err
 	}
-
-	lambda, ok := args[1].(*Lambda)
-	if !ok {
+	if args[1] == nil {
 		return nil, fmt.Errorf("second argument to $reduce must be a function")
+	}
+	// D3050: callback must accept at least 2 args
+	switch f := args[1].(type) {
+	case *Lambda:
+		if len(f.Params) < 2 {
+			return nil, types.NewError(types.ErrReduceInsufficientArgs,
+				"The second argument of reduce function must be a function with at least two arguments", -1)
+		}
+	case *FunctionDef:
+		if f.MinArgs < 2 {
+			return nil, types.NewError(types.ErrReduceInsufficientArgs,
+				"The second argument of reduce function must be a function with at least two arguments", -1)
+		}
 	}
 
 	if len(arr) == 0 {
-		if len(args) == 3 {
+		if len(args) >= 3 {
 			return args[2], nil
 		}
 		return nil, nil
@@ -384,7 +442,7 @@ func fnReduce(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 	var accumulator interface{}
 	startIdx := 0
 
-	if len(args) == 3 {
+	if len(args) >= 3 && args[2] != nil {
 		accumulator = args[2]
 	} else {
 		accumulator = arr[0]
@@ -392,7 +450,7 @@ func fnReduce(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 	}
 
 	for i := startIdx; i < len(arr); i++ {
-		value, err := e.callLambda(ctx, lambda, []interface{}{accumulator, arr[i]})
+		value, err := e.callHOFFn(ctx, evalCtx, args[1], []interface{}{accumulator, arr[i], float64(i), arr})
 		if err != nil {
 			return nil, err
 		}
@@ -402,46 +460,143 @@ func fnReduce(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 	return accumulator, nil
 }
 
-func fnSort(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+// fnSingle finds the single element in an array matching an optional predicate.
+// Throws D3138 if more than one element matches, D3139 if no element matches.
+func fnSingle(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
 	arr, err := e.toArray(args[0])
 	if err != nil {
 		return nil, err
+	}
+
+	var fn interface{}
+	if len(args) >= 2 {
+		fn = args[1]
+	}
+
+	hasFoundMatch := false
+	var result interface{}
+
+	for i, entry := range arr {
+		positiveResult := true
+		if fn != nil {
+			res, err := e.callHOFFn(ctx, evalCtx, fn, []interface{}{entry, float64(i), arr})
+			if err != nil {
+				return nil, err
+			}
+			positiveResult = e.isTruthy(res)
+		}
+		if positiveResult {
+			if !hasFoundMatch {
+				result = entry
+				hasFoundMatch = true
+			} else {
+				return nil, types.NewError(types.ErrSingleMultipleMatches,
+					"The $single() function expected exactly 1 matching result. Instead it matched more.", -1)
+			}
+		}
+	}
+
+	if !hasFoundMatch {
+		return nil, types.NewError(types.ErrSingleNoMatch,
+			"The $single() function expected exactly 1 matching result. Instead it matched 0.", -1)
+	}
+
+	return result, nil
+}
+
+func fnSort(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+	if args[0] == nil {
+		return nil, nil
+	}
+
+	arr, err := e.toArray(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	if len(arr) == 0 {
+		return nil, nil
 	}
 
 	// Make a copy to avoid modifying the original
 	result := make([]interface{}, len(arr))
 	copy(result, arr)
 
-	if len(args) == 1 {
-		// Default sort: numeric or string
+	if len(args) == 1 || args[1] == nil {
+		// Default sort: all elements must be the same type (all numbers OR all strings)
+		// Otherwise return D3070
+		var sortErr error
 		sort.SliceStable(result, func(i, j int) bool {
-			// Try numeric comparison first
-			ni, oki := result[i].(float64)
-			nj, okj := result[j].(float64)
-			if oki && okj {
-				return ni < nj
-			}
-
-			// Fall back to string comparison
-			si := e.toString(result[i])
-			sj := e.toString(result[j])
-			return si < sj
-		})
-	} else {
-		// Custom sort with lambda
-		lambda, ok := args[1].(*Lambda)
-		if !ok {
-			return nil, fmt.Errorf("second argument to $sort must be a function")
-		}
-
-		sort.SliceStable(result, func(i, j int) bool {
-			value, err := e.callLambda(ctx, lambda, []interface{}{result[i], result[j]})
-			if err != nil {
+			if sortErr != nil {
 				return false
 			}
-			// Truthy means i < j
-			return e.isTruthy(value)
+			ni, isNi := result[i].(float64)
+			nj, isNj := result[j].(float64)
+			si, isSi := result[i].(string)
+			sj, isSj := result[j].(string)
+
+			if isNi && isNj {
+				return ni < nj
+			}
+			if isSi && isSj {
+				return si < sj
+			}
+			// Mixed types or non-comparable types (objects, booleans, etc.)
+			sortErr = types.NewError(types.ErrTypeMismatch, "D3070 $sort: mixed types in array", -1)
+			return false
 		})
+		if sortErr != nil {
+			return nil, sortErr
+		}
+	} else {
+		// Custom sort with comparator function.
+		// JSONata convention: fn($a, $b) returns true when $a > $b (a comes AFTER b).
+		// Go sort convention: less(i,j) returns true when arr[i] comes BEFORE arr[j].
+		// Logic: less(i,j) = true iff $a < $b, i.e. !fn($a,$b) && fn($b,$a)
+		var sortErr error
+		sort.SliceStable(result, func(i, j int) bool {
+			if sortErr != nil {
+				return false
+			}
+			callFn := func(a, b interface{}) (bool, error) {
+				var value interface{}
+				var err error
+				switch fn := args[1].(type) {
+				case *Lambda:
+					value, err = e.callLambda(ctx, fn, []interface{}{a, b})
+				case *FunctionDef:
+					value, err = fn.Impl(ctx, e, evalCtx, []interface{}{a, b})
+				default:
+					return false, fmt.Errorf("second argument to $sort must be a function")
+				}
+				if err != nil {
+					return false, err
+				}
+				return e.isTruthy(value), nil
+			}
+			// Check fn($a, $b): if true, a > b → a comes AFTER b → less = false
+			fwd, err := callFn(result[i], result[j])
+			if err != nil {
+				sortErr = err
+				return false
+			}
+			if fwd {
+				return false // a > b: a comes after b
+			}
+			// Check fn($b, $a): if true, b > a → a comes BEFORE b → less = true
+			bwd, err := callFn(result[j], result[i])
+			if err != nil {
+				sortErr = err
+				return false
+			}
+			return bwd // a < b: a comes before b; if equal (both false) → stable
+		})
+		if sortErr != nil {
+			return nil, sortErr
+		}
 	}
 
 	return result, nil
@@ -509,14 +664,11 @@ func fnString(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 
 	// Check for prettify parameter (second arg)
 	prettify := false
-	if len(args) > 1 {
+	if len(args) > 1 && args[1] != nil {
 		if p, ok := args[1].(bool); ok {
 			prettify = p
-		} else {
-			// Second argument provided but not boolean - error
-			return nil, types.NewError(types.ErrArgumentCountMismatch,
-				"function $string: second argument must be boolean", -1)
 		}
+		// Non-boolean second arg is ignored (e.g. when $string is used as HOF callback)
 	}
 
 	// For simple types, use toString
@@ -1958,22 +2110,54 @@ func fnBase64Decode(ctx context.Context, e *Evaluator, evalCtx *EvalContext, arg
 	return string(decoded), nil
 }
 
-// fnEncodeUrl encodes a URL string.
+// fnEncodeUrl encodes a URL string (like JS encodeURI).
 // Signature: $encodeUrl(string)
-// Encodes the full URL (path and query string).
+// Encodes all chars except: letters, digits and -_.!~*'();/?:@&=+$,#%
 func fnEncodeUrl(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
 	if args[0] == nil {
 		return nil, nil
 	}
-
 	str := e.toString(args[0])
-	// Parse and re-encode to handle special characters
-	u, err := url.Parse(str)
-	if err != nil {
-		// If parsing fails, do basic escaping
-		return url.PathEscape(str), nil
+	return encodeURIJS(str, false)
+}
+
+// encodeURIJS implements JS encodeURI or encodeURIComponent semantics.
+// isComponent=false: encodeURI - preserves ;/?:@&=+$,#%
+// isComponent=true: encodeURIComponent - encodes those too
+func encodeURIJS(str string, isComponent bool) (string, error) {
+	// Characters not encoded by encodeURI:
+	const encodeURIExcluded = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'();/?:@&=+$,#%"
+	// Characters not encoded by encodeURIComponent:
+	const encodeURIComponentExcluded = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()"
+
+	excluded := encodeURIExcluded
+	if isComponent {
+		excluded = encodeURIComponentExcluded
 	}
-	return u.String(), nil
+
+	// Check for lone surrogates (U+D800-U+DFFF)
+	// These appear in Go strings as replacement character U+FFFD (EF BF BD)
+	// or as the raw surrogate bytes in invalid UTF-8
+	for _, r := range str {
+		if r == '\uFFFD' {
+			// Could be a replacement for a lone surrogate
+			return "", types.NewError("D3140", fmt.Sprintf("The argument of function encodeUrl contains an unpaired surrogate: %q", str), -1)
+		}
+		if r >= 0xD800 && r <= 0xDFFF {
+			return "", types.NewError("D3140", fmt.Sprintf("The argument of function encodeUrl contains an unpaired surrogate: %q", str), -1)
+		}
+	}
+
+	var buf strings.Builder
+	bytes := []byte(str)
+	for _, b := range bytes {
+		if strings.ContainsRune(excluded, rune(b)) {
+			buf.WriteByte(b)
+		} else {
+			fmt.Fprintf(&buf, "%%%02X", b)
+		}
+	}
+	return buf.String(), nil
 }
 
 // fnDecodeUrl decodes a URL string.
@@ -1991,25 +2175,19 @@ func fnDecodeUrl(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args [
 	return decoded, nil
 }
 
-// fnEncodeUrlComponent encodes a URL component (query parameter value).
+// fnEncodeUrlComponent encodes a URL component (like JS encodeURIComponent).
 // Signature: $encodeUrlComponent(string)
 func fnEncodeUrlComponent(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
 	if args[0] == nil {
 		return nil, nil
 	}
-
 	str := e.toString(args[0])
-
-	// Check for lone surrogates (invalid UTF-16)
-	for _, r := range str {
-		// High surrogate: U+D800 - U+DBFF
-		// Low surrogate: U+DC00 - U+DFFF
-		if r >= 0xD800 && r <= 0xDFFF {
-			return nil, types.NewError("D3140", fmt.Sprintf("The argument of function encodeUrlComponent contains an unpaired surrogate: %q", str), -1)
-		}
+	result, err := encodeURIJS(str, true)
+	if err != nil {
+		// Change error message to mention encodeUrlComponent
+		return nil, types.NewError("D3140", fmt.Sprintf("The argument of function encodeUrlComponent contains an unpaired surrogate: %q", str), -1)
 	}
-
-	return url.QueryEscape(str), nil
+	return result, nil
 }
 
 // fnDecodeUrlComponent decodes a URL component.

@@ -27,12 +27,17 @@ const (
 	ErrLeftSideAssignment    ErrorCode = "T2001"
 
 	// D0xxx: Evaluation errors
-	ErrNumberTooLarge      ErrorCode = "D1001"
-	ErrInvokeNonFunction   ErrorCode = "D1002"
-	ErrLeftSideRange       ErrorCode = "D2001"
-	ErrSerializeNonFinite  ErrorCode = "D3001"
-	ErrRecursiveDefinition ErrorCode = "D3010"
-	ErrStackOverflow       ErrorCode = "D3020"
+	ErrNumberTooLarge         ErrorCode = "D1001"
+	ErrInvokeNonFunction      ErrorCode = "D1002"
+	ErrLeftSideRange          ErrorCode = "D2001"
+	ErrSerializeNonFinite     ErrorCode = "D3001"
+	ErrRecursiveDefinition    ErrorCode = "D3010"
+	ErrStackOverflow          ErrorCode = "D3020"
+	ErrReduceInsufficientArgs ErrorCode = "D3050"
+	ErrTypeMismatch           ErrorCode = "D3070"
+	ErrSingleMultipleMatches  ErrorCode = "D3138"
+	ErrSingleNoMatch          ErrorCode = "D3139"
+	ErrEncodeURISurrogate     ErrorCode = "D3140"
 
 	// U0xxx: Runtime errors
 	ErrUndefinedVariable ErrorCode = "U1001"

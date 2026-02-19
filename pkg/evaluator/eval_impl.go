@@ -161,10 +161,23 @@ func (e *Evaluator) evalNameString(name string, evalCtx *EvalContext) (interface
 						result = append(result, value)
 					}
 				}
+			} else if subArr, ok := item.([]interface{}); ok {
+				// Nested array: recurse into it
+				subCtx := evalCtx.NewChildContext(subArr)
+				if value, err := e.evalNameString(name, subCtx); err == nil && value != nil {
+					if subArrVal, isArr := value.([]interface{}); isArr {
+						result = append(result, subArrVal...)
+					} else {
+						result = append(result, value)
+					}
+				}
 			}
 		}
 		if len(result) == 0 {
 			return nil, nil
+		}
+		if len(result) == 1 {
+			return result[0], nil
 		}
 		return result, nil
 	}
@@ -1606,11 +1619,14 @@ func (e *Evaluator) evalLambda(node *types.ASTNode, evalCtx *EvalContext) (inter
 		sig = parsedSig
 	}
 
-	// Create lambda with closure over current context
+	// Create lambda with closure over current context.
+	// We store evalCtx directly (not cloned) so that the lambda can see
+	// bindings added AFTER lambda creation in the same block scope (enables recursion).
+	// callLambda() creates its own clone of this context at call time.
 	lambda := &Lambda{
 		Params:    params,
 		Body:      node.RHS, // Body is in RHS
-		Ctx:       evalCtx.Clone(),
+		Ctx:       evalCtx,
 		Signature: sig,
 	}
 
@@ -1926,6 +1942,117 @@ func (e *Evaluator) evalApply(ctx context.Context, node *types.ASTNode, evalCtx 
 		}
 	}
 
+	// Check if RHS is a NodeFilter wrapping a function call (e.g., $map($fn)[])
+	// In this case, inject data into the inner function call, then apply the filter
+	if node.RHS.Type == types.NodeFilter && node.RHS.LHS != nil && node.RHS.LHS.Type == types.NodeFunction {
+		innerFnNode := node.RHS.LHS
+		filterNode := node.RHS
+
+		// Evaluate the inner function call with data prepended
+		var innerResult interface{}
+		if innerFnNode.LHS != nil {
+			// Variable/lambda call - evaluate the callable and call with data prepended
+			callableValue, err := e.evalNode(ctx, innerFnNode.LHS, evalCtx)
+			if err != nil {
+				return nil, err
+			}
+			args := make([]interface{}, 0, len(innerFnNode.Arguments)+1)
+			args = append(args, data)
+			for _, argNode := range innerFnNode.Arguments {
+				arg, err := e.evalNode(ctx, argNode, evalCtx)
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, arg)
+			}
+			switch fn := callableValue.(type) {
+			case *Lambda:
+				innerResult, err = e.callLambda(ctx, fn, args)
+			case *FunctionDef:
+				if len(args) < fn.MinArgs {
+					return nil, types.NewError(types.ErrArgumentCountMismatch,
+						fmt.Sprintf("function requires at least %d arguments, got %d", fn.MinArgs, len(args)), -1)
+				}
+				innerResult, err = fn.Impl(ctx, e, evalCtx, args)
+			default:
+				return nil, fmt.Errorf("expected lambda or function, got %T", callableValue)
+			}
+			if err != nil {
+				return nil, err
+			}
+		} else if innerFnNode.Value != nil {
+			// Named function call
+			funcName := innerFnNode.Value.(string)
+			fnDef, ok := GetFunction(funcName)
+			if !ok {
+				return nil, fmt.Errorf("unknown function: %s", funcName)
+			}
+			args := make([]interface{}, 0, len(innerFnNode.Arguments)+1)
+			args = append(args, data)
+			for _, argNode := range innerFnNode.Arguments {
+				arg, err := e.evalNode(ctx, argNode, evalCtx)
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, arg)
+			}
+			if len(args) < fnDef.MinArgs {
+				return nil, types.NewError(types.ErrArgumentCountMismatch,
+					fmt.Sprintf("function requires at least %d arguments, got %d", fnDef.MinArgs, len(args)), -1)
+			}
+			innerResult, err = fnDef.Impl(ctx, e, evalCtx, args)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// Now apply the filter/keep-array operation to the inner result
+		// We DON'T call evalFilter(filterNode) because that would re-evaluate filterNode.LHS.
+		// Instead, apply the filter directly to innerResult.
+		if filterNode.RHS == nil {
+			// Empty filter [] means "return as array" (KeepArray)
+			arr, err := e.toArray(innerResult)
+			if err != nil {
+				return nil, err
+			}
+			if len(arr) == 0 {
+				return nil, nil
+			}
+			return arr, nil
+		}
+		// Non-empty filter: apply predicate to innerResult
+		innerArr, err := e.toArray(innerResult)
+		if err != nil {
+			return nil, err
+		}
+		// Apply filter predicate similar to evalFilter but using innerArr directly
+		var filterResult []interface{}
+		for i, item := range innerArr {
+			itemCtx := evalCtx.NewChildContext(item)
+			itemCtx.SetBinding("", item) // Set $ to item
+			// Evaluate filter predicate
+			predVal, err := e.evalNode(ctx, filterNode.RHS, itemCtx)
+			if err != nil {
+				return nil, err
+			}
+			// Check if predicate is a number (index)
+			if idx, ok := predVal.(float64); ok {
+				if int(idx) == i {
+					filterResult = append(filterResult, item)
+				}
+			} else if e.isTruthy(predVal) {
+				filterResult = append(filterResult, item)
+			}
+		}
+		if len(filterResult) == 0 {
+			return nil, nil
+		}
+		if len(filterResult) == 1 {
+			return filterResult[0], nil
+		}
+		return filterResult, nil
+	}
+
 	// Check if RHS is a function call
 	if node.RHS.Type == types.NodeFunction {
 		// It's a function call - inject data as first argument
@@ -2200,8 +2327,8 @@ func (e *Evaluator) callLambda(ctx context.Context, lambda *Lambda, args []inter
 			}
 		}
 	} else {
-		// No signature - validate argument count matches parameter count
-		if len(args) != len(lambda.Params) {
+		// No signature - validate argument count: allow fewer args (missing ones default to nil)
+		if len(args) > len(lambda.Params) {
 			return nil, fmt.Errorf("lambda expects %d arguments, got %d", len(lambda.Params), len(args))
 		}
 	}
