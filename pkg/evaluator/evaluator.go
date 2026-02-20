@@ -115,20 +115,13 @@ func (e *Evaluator) Eval(ctx context.Context, expr *types.Expression, data inter
 	// (e.g. from @$var or #$var expressions at the end of a path with no further steps)
 	result = unwrapCVsDeep(result)
 
-	// Singleton array unwrapping: JSONata unwraps singleton arrays at the top level
-	// UNLESS the expression has KeepArray flag set (e.g., using [] syntax)
-	// OR the root expression is an array literal (to preserve [[x]] as [[x]])
-	if arr, ok := result.([]interface{}); ok && len(arr) == 1 {
-		// Check if we should keep the array structure
-		keepArray := expr.AST().KeepArray || hasKeepArrayInASTChain(expr.AST())
-
-		// Also keep array if the root is an array literal
-		isArrayLiteral := expr.AST().Type == types.NodeArray
-
-		if !keepArray && !isArrayLiteral {
-			return arr[0], nil
-		}
-	}
+	// NOTE: Singleton-sequence unwrapping (returning the single item of a 1-element
+	// collection instead of the collection itself) is intentionally NOT done here.
+	// Each evaluator that builds a sequence (evalPath, evalNameString on an array
+	// context) already performs the unwrap at the right level.
+	// Doing it here too would incorrectly unwrap actual array VALUES that happen to
+	// have one element (e.g. a JSON field whose value is ["Account"]) — those must
+	// be returned as-is, just like JSONata JS does.
 
 	return result, nil
 }
