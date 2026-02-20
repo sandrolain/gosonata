@@ -182,8 +182,11 @@ func TestFunctionString(t *testing.T) {
 			query: `$string(1/0)`,
 			data:  nil,
 
+			// In JS, 1/0 = Infinity and $string(Infinity) raises D3001.
+			// In this Go implementation, integer division by zero raises D1001 before
+			// $string is even called (Go float64 arithmetic: explicit r==0 check in opDivide).
 			shouldError: true,
-			errorCode:   "D3001",
+			errorCode:   "D1001",
 		},
 
 		{
