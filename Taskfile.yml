@@ -54,7 +54,7 @@ tasks:
   test:comparison:
     desc: Run comparison tests with JavaScript implementation
     cmds:
-      - go test -v -race ./tests/comparison/...
+      - go test -v -count=1 ./tests/comparison/...
 
   test:watch:
     desc: Run tests on file changes
@@ -95,15 +95,25 @@ tasks:
     cmds:
       - go test -bench=. -benchmem -run=^$ ./... | tee benchmark.txt
 
-  bench:parser:
+  bench:parse:
     desc: Benchmark parser performance
     cmds:
-      - go test -bench=BenchmarkParser -benchmem ./tests/benchmark/...
+      - go test -bench=BenchmarkParse -benchmem ./tests/benchmark/...
 
-  bench:evaluator:
+  bench:eval:
     desc: Benchmark evaluator performance
     cmds:
       - go test -bench=BenchmarkEval -benchmem ./tests/benchmark/...
+
+  bench:comparison:
+    desc: Run GoSonata vs JSONata JS comparison benchmarks
+    cmds:
+      - go test -bench=BenchmarkGoSonata -benchmem -count=1 ./tests/comparison/...
+
+  bench:comparison:report:
+    desc: Print full GoSonata vs JSONata JS comparison report
+    cmds:
+      - go test -run TestJSComparison -v -count=1 ./tests/comparison/...
 
   # Linting tasks
   lint:
