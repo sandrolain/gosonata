@@ -34,8 +34,19 @@ func checkNode(t *testing.T, node *types.ASTNode, expectedType types.NodeType, e
 	if node.Type != expectedType {
 		t.Errorf("Expected node type %s, got %s", expectedType, node.Type)
 	}
-	if expectedValue != nil && node.Value != expectedValue {
-		t.Errorf("Expected value %v, got %v", expectedValue, node.Value)
+	if expectedValue != nil {
+		// For function nodes the name is in LHS.Value (parser stores callee as LHS)
+		if expectedType == types.NodeFunction {
+			if node.LHS == nil || node.LHS.Value != expectedValue {
+				lhsVal := interface{}(nil)
+				if node.LHS != nil {
+					lhsVal = node.LHS.Value
+				}
+				t.Errorf("Expected function name %v (in LHS.Value), got %v", expectedValue, lhsVal)
+			}
+		} else if node.Value != expectedValue {
+			t.Errorf("Expected value %v, got %v", expectedValue, node.Value)
+		}
 	}
 }
 
@@ -639,11 +650,11 @@ func TestParseFunctionCalls(t *testing.T) {
 		funcName string
 		argCount int
 	}{
-		{"no arguments", "sum()", "sum", 0},
-		{"single argument", "abs(-5)", "abs", 1},
-		{"multiple arguments", "power(2, 8)", "power", 2},
-		{"nested call", "sum(abs(-5), abs(-3))", "sum", 2},
-		{"with path", "map(items, getName)", "map", 2},
+		{"no arguments", "$sum()", "sum", 0},
+		{"single argument", "$abs(-5)", "abs", 1},
+		{"multiple arguments", "$power(2, 8)", "power", 2},
+		{"nested call", "$sum($abs(-5), $abs(-3))", "sum", 2},
+		{"with path", "$map(items, getName)", "map", 2},
 	}
 
 	for _, tt := range tests {
@@ -662,12 +673,12 @@ func TestParseComplexFunctionCalls(t *testing.T) {
 		name  string
 		input string
 	}{
-		{"string argument", `upper("hello")`},
-		{"expression argument", "sum(a + b, c * d)"},
-		{"array argument", "sum([1, 2, 3])"},
-		{"object argument", `merge({"a": 1}, {"b": 2})`},
-		{"chained calls", "upper(lower(name))"},
-		{"lambda argument", "map(items, function($x) { $x * 2 })"},
+		{"string argument", `$upper("hello")`},
+		{"expression argument", "$sum(a + b, c * d)"},
+		{"array argument", "$sum([1, 2, 3])"},
+		{"object argument", `$merge({"a": 1}, {"b": 2})`},
+		{"chained calls", "$upper($lower(name))"},
+		{"lambda argument", "$map(items, function($x) { $x * 2 })"},
 	}
 
 	for _, tt := range tests {

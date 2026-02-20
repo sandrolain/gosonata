@@ -133,7 +133,9 @@ func TestFnLength(t *testing.T) {
 		want  float64
 	}{
 		{"string length", `$length("hello")`, 5.0},
-		{"array length", "$length([1, 2, 3])", 3.0},
+		// Note: $length() accepts only strings per JSONata spec.
+		// Use $count() for arrays.
+		{"array count", "$count([1, 2, 3])", 3.0},
 	}
 
 	for _, tt := range tests {
