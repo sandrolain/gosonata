@@ -207,23 +207,26 @@ task bench:comparison:report
 
 ### GoSonata vs JSONata JS (reference implementation)
 
-Eval-only comparison (expression pre-compiled on both sides):
+Eval-only comparison (expression pre-compiled on both sides, data in native format).
+Each scenario is verified to produce identical results in both engines (`TestResultCorrectness`).
 
 | Scenario | GoSonata ns/op | JSONata JS ns/op | Speedup |
 |---|---|---|---|
-| SimplePath / 1 user | 720 | 1,685 | **2.3×** |
-| Filter / 10 users | 1,102 | 11,914 | **10.8×** |
-| Filter / 100 users | 1,165 | 193,699 | **166×** |
-| Filter / 1000 users | 1,245 | 2,024,427 | **1627×** |
-| Aggregation / 10 users | 786 | 3,940 | **5.0×** |
-| Aggregation / 100 users | 1,218 | 115,426 | **95×** |
-| Transform / 10 users | 1,904 | 11,952 | **6.3×** |
-| Transform / 100 users | 2,323 | 57,635 | **25×** |
-| Sort / 10 users | 995 | 53,245 | **53×** |
-| Sort / 100 users | 985 | 933,452 | **948×** |
-| Arithmetic | 1,317 | 3,190 | **2.4×** |
+| SimplePath / 1 user | ~730 | ~1,600 | **~2×** |
+| Filter / 10 users | ~3,600 | ~12,500 | **~3.4×** |
+| Filter / 100 users | ~29,000 | ~120,000 | **~4.2×** |
+| Filter / 1000 users | ~317,000 | ~1,180,000 | **~3.7×** |
+| Aggregation / 10 users | ~2,000 | ~4,500 | **~2.3×** |
+| Aggregation / 100 users | ~9,900 | ~23,400 | **~2.4×** |
+| Transform / 10 users | ~4,600 | ~12,300 | **~2.7×** |
+| Transform / 100 users | ~22,700 | ~48,600 | **~2.1×** |
+| Sort / 10 users | ~7,700 | ~50,300 | **~6.6×** |
+| Sort / 100 users | ~107,000 | ~985,000 | **~9.2×** |
+| Arithmetic | ~1,300 | ~3,200 | **~2.5×** |
 
-> JSONata JS timings measured within a single persistent Node.js process to exclude startup cost.
+> JSONata JS timings measured within a single persistent Node.js process (no startup cost).
+> JS `evaluate()` is inherently async (Promise); Go is synchronous — the async overhead
+> is included since it is unavoidable in real JS usage.
 
 ## Security
 

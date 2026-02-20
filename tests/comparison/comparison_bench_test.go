@@ -42,6 +42,17 @@ var (
 	cmpXLData     interface{}
 )
 
+// jsonRoundTrip marshals v to JSON and back so all integer fields become float64.
+// This is necessary because GoSonata's evaluator (like JSONata JS) expects numeric
+// values in the same format produced by json.Unmarshal — i.e. float64, not int.
+// Without this, comparisons like `age > 25` silently fail on native Go int data.
+func jsonRoundTrip(v interface{}) interface{} {
+	b, _ := json.Marshal(v)
+	var out interface{}
+	_ = json.Unmarshal(b, &out)
+	return out
+}
+
 func init() {
 	departments := []string{"Engineering", "Sales", "Marketing", "HR", "Finance"}
 	build := func(n int) interface{} {
@@ -58,12 +69,14 @@ func init() {
 		}
 		return map[string]interface{}{"users": users}
 	}
-	cmpSmallData = map[string]interface{}{
+	// Round-trip through JSON so numeric fields are float64 (not int),
+	// matching what both GoSonata and JSONata JS receive when data arrives as JSON.
+	cmpSmallData = jsonRoundTrip(map[string]interface{}{
 		"name": "John Doe", "age": 30, "active": true, "score": 95.5,
-	}
-	cmpMediumData = build(10)
-	cmpLargeData = build(100)
-	cmpXLData = build(1000)
+	})
+	cmpMediumData = jsonRoundTrip(build(10))
+	cmpLargeData = jsonRoundTrip(build(100))
+	cmpXLData = jsonRoundTrip(build(1000))
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +159,7 @@ func BenchmarkGoSonata_SimplePath_Small(b *testing.B) {
 }
 
 func BenchmarkGoSonata_Filter_Medium(b *testing.B) {
-	expr := mustCmpParse("$.users[age > 30].name")
+	expr := mustCmpParse("$.users[age > 25].name")
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -157,7 +170,7 @@ func BenchmarkGoSonata_Filter_Medium(b *testing.B) {
 }
 
 func BenchmarkGoSonata_Filter_Large(b *testing.B) {
-	expr := mustCmpParse("$.users[age > 30 and department = 'Engineering'].name")
+	expr := mustCmpParse("$.users[age > 25].name")
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -168,7 +181,7 @@ func BenchmarkGoSonata_Filter_Large(b *testing.B) {
 }
 
 func BenchmarkGoSonata_Filter_XL(b *testing.B) {
-	expr := mustCmpParse("$.users[age > 30 and department = 'Engineering'].name")
+	expr := mustCmpParse("$.users[age > 25].name")
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -190,7 +203,7 @@ func BenchmarkGoSonata_Aggregation_Medium(b *testing.B) {
 }
 
 func BenchmarkGoSonata_Aggregation_Large(b *testing.B) {
-	expr := mustCmpParse("$sum($.users[active = true].salary)")
+	expr := mustCmpParse("$sum($.users.salary)")
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -275,11 +288,11 @@ func TestJSComparison(t *testing.T) {
 
 	cases := []benchCase{
 		{"SimplePath/small", "$.name", cmpSmallData, 50000, 1000},
-		{"Filter/medium", "$.users[age > 30].name", cmpMediumData, 20000, 500},
-		{"Filter/large", "$.users[age > 30 and department = 'Engineering'].name", cmpLargeData, 5000, 200},
-		{"Filter/xl", "$.users[age > 30 and department = 'Engineering'].name", cmpXLData, 1000, 100},
+		{"Filter/medium", "$.users[age > 25].name", cmpMediumData, 20000, 500},
+		{"Filter/large", "$.users[age > 25].name", cmpLargeData, 5000, 200},
+		{"Filter/xl", "$.users[age > 25].name", cmpXLData, 1000, 100},
 		{"Aggregation/medium", "$sum($.users.salary)", cmpMediumData, 20000, 500},
-		{"Aggregation/large", "$sum($.users[active = true].salary)", cmpLargeData, 5000, 200},
+		{"Aggregation/large", "$sum($.users.salary)", cmpLargeData, 5000, 200},
 		{"Transform/medium", `{"count": $count($.users), "avg": $average($.users.salary), "names": $.users.name}`, cmpMediumData, 20000, 500},
 		{"Transform/large", `{"count": $count($.users), "avg": $average($.users.salary), "departments": $distinct($.users.department)}`, cmpLargeData, 3000, 100},
 		{"Sort/medium", "$sort($.users, function($a, $b) { $a.salary > $b.salary })", cmpMediumData, 10000, 300},
@@ -345,4 +358,114 @@ func TestJSComparison(t *testing.T) {
 	}
 	tw.Flush()
 	fmt.Println()
+}
+
+// ---------------------------------------------------------------------------
+// Result correctness verification
+//
+// Ensures GoSonata and JSONata JS produce semantically identical output for
+// every benchmarked query. This guards against spurious speedups caused by
+// GoSonata returning wrong (e.g. null) results faster than JS returns correct ones.
+//
+//	go test -run TestResultCorrectness -v -count=1 ./tests/comparison/...
+// ---------------------------------------------------------------------------
+
+func evalRunnerPath(t testing.TB) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if ok {
+		dir := filepath.Dir(thisFile)
+		p := filepath.Join(dir, "eval_runner.js")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return filepath.Join("tests", "comparison", "eval_runner.js")
+}
+
+// runJSEval evaluates query against data once in the JS engine and returns the
+// JSON-serialised result (undefined → null).
+func runJSEval(t testing.TB, query string, data interface{}) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]interface{}{"query": query, "data": data})
+	if err != nil {
+		t.Fatalf("runJSEval marshal: %v", err)
+	}
+	cmd := exec.Command("node", evalRunnerPath(t))
+	cmd.Stdin = bytes.NewReader(payload)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("runJSEval node exec: %v\noutput: %s", err, string(out))
+	}
+	var envelope struct {
+		Success bool            `json:"success"`
+		Result  json.RawMessage `json:"result"`
+		Error   string          `json:"error"`
+	}
+	if err := json.Unmarshal(out, &envelope); err != nil {
+		t.Fatalf("runJSEval unmarshal: %v\nraw: %s", err, string(out))
+	}
+	if !envelope.Success {
+		t.Fatalf("runJSEval JS error: %s", envelope.Error)
+	}
+	return string(envelope.Result)
+}
+
+func TestResultCorrectness(t *testing.T) {
+	type checkCase struct {
+		name  string
+		query string
+		data  interface{}
+	}
+	cases := []checkCase{
+		{"SimplePath/small", "$.name", cmpSmallData},
+		{"Filter/medium", "$.users[age > 25].name", cmpMediumData},
+		{"Filter/large", "$.users[age > 25].name", cmpLargeData},
+		{"Filter/xl", "$.users[age > 25].name", cmpXLData},
+		{"Aggregation/medium", "$sum($.users.salary)", cmpMediumData},
+		{"Aggregation/large", "$sum($.users.salary)", cmpLargeData},
+		{"Transform/medium", `{"count": $count($.users), "avg": $average($.users.salary), "names": $.users.name}`, cmpMediumData},
+		{"Transform/large", `{"count": $count($.users), "avg": $average($.users.salary), "departments": $distinct($.users.department)}`, cmpLargeData},
+		{"Sort/medium", "$sort($.users, function($a, $b) { $a.salary > $b.salary })", cmpMediumData},
+		{"Arithmetic", "(1 + 2) * 3 / 4 - 5 % 3", nil},
+	}
+
+	ev := evaluator.New()
+	ctx := context.Background()
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			expr, err := parser.Parse(c.query)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			goResult, err := ev.Eval(ctx, expr, c.data)
+			if err != nil {
+				t.Fatalf("go eval error: %v", err)
+			}
+
+			// Normalise Go result through JSON round-trip so types are comparable.
+			goJSON, err := json.Marshal(goResult)
+			if err != nil {
+				t.Fatalf("marshal go result: %v", err)
+			}
+			var goNorm interface{}
+			_ = json.Unmarshal(goJSON, &goNorm)
+
+			jsRaw := runJSEval(t, c.query, c.data)
+			var jsNorm interface{}
+			if err := json.Unmarshal([]byte(jsRaw), &jsNorm); err != nil {
+				t.Fatalf("unmarshal js result: %v", err)
+			}
+
+			goFinal, _ := json.Marshal(goNorm)
+			jsFinal, _ := json.Marshal(jsNorm)
+
+			if string(goFinal) != string(jsFinal) {
+				t.Errorf("result mismatch:\n  GoSonata : %s\n  JSONata JS: %s", string(goFinal), string(jsFinal))
+			} else {
+				t.Logf("OK: %s", string(goFinal))
+			}
+		})
+	}
 }

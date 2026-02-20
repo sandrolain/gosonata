@@ -56,6 +56,11 @@ tasks:
     cmds:
       - go test -v -count=1 ./tests/comparison/...
 
+  test:comparison:correctness:
+    desc: Verify GoSonata and JSONata JS produce identical results for all benchmark queries
+    cmds:
+      - go test -run TestResultCorrectness -v -count=1 ./tests/comparison/...
+
   test:watch:
     desc: Run tests on file changes
     cmds:
