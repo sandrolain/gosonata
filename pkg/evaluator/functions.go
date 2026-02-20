@@ -833,14 +833,13 @@ func fnLength(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 		return nil, nil
 	}
 
-	// $length only accepts strings
-	str, ok := args[0].(string)
+	// $length accepts only strings
+	v, ok := args[0].(string)
 	if !ok {
 		return nil, fmt.Errorf("T0410: $length() argument must be a string")
 	}
-
 	// Count Unicode characters (runes), not bytes
-	return float64(utf8.RuneCountInString(str)), nil
+	return float64(utf8.RuneCountInString(v)), nil
 }
 
 func fnSubstring(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
@@ -1744,6 +1743,16 @@ func fnMatch(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []int
 		str = fmt.Sprint(args[0])
 	}
 
+	// Get limit if provided (must be extracted before using in custom matcher)
+	limit := -1
+	if len(args) > 2 && args[2] != nil {
+		limitNum, err := e.toNumber(args[2])
+		if err != nil {
+			return nil, err
+		}
+		limit = int(limitNum)
+	}
+
 	// Get pattern (string or regex)
 	var regexPattern *regexp.Regexp
 	var err error
@@ -1756,21 +1765,89 @@ func fnMatch(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []int
 		}
 	case *regexp.Regexp:
 		regexPattern = pattern
+	case *Lambda, *FunctionDef:
+		// Custom matcher function protocol.
+		// The matcher is called as matcher(str, offset?) and returns a match object:
+		//   { match: string, start: int, end: int, groups: array, next: function }
+		// or null/undefined if no match.
+		// To iterate: call result.next() to get the next match object.
+		result := make([]interface{}, 0)
+		cnt := 0
+		// Initial call with just the string (no offset)
+		currentMatch, err := e.callHOFFn(ctx, evalCtx, args[1], []interface{}{str})
+		if err != nil {
+			return nil, err
+		}
+		for currentMatch != nil {
+			if limit >= 0 && cnt >= limit {
+				break
+			}
+			// Extract match fields
+			var matchStr string
+			var matchIndex float64
+			var groups []interface{}
+
+			switch m := currentMatch.(type) {
+			case map[string]interface{}:
+				if v, ok := m["match"].(string); ok {
+					matchStr = v
+				}
+				if v, ok := m["start"].(float64); ok {
+					matchIndex = v
+				}
+				if v, ok := m["groups"].([]interface{}); ok {
+					groups = v
+				}
+			case *OrderedObject:
+				if v, ok := m.Values["match"].(string); ok {
+					matchStr = v
+				}
+				if v, ok := m.Values["start"].(float64); ok {
+					matchIndex = v
+				}
+				if v, ok := m.Values["groups"].([]interface{}); ok {
+					groups = v
+				}
+			default:
+				break
+			}
+			if groups == nil {
+				groups = []interface{}{}
+			}
+			matchObj := &OrderedObject{
+				Keys: []string{"match", "index", "groups"},
+				Values: map[string]interface{}{
+					"match":  matchStr,
+					"index":  matchIndex,
+					"groups": groups,
+				},
+			}
+			result = append(result, matchObj)
+			cnt++
+
+			// Get next match by calling the next() function from the match object
+			var nextFn interface{}
+			switch m := currentMatch.(type) {
+			case map[string]interface{}:
+				nextFn = m["next"]
+			case *OrderedObject:
+				nextFn = m.Values["next"]
+			}
+			if nextFn == nil {
+				break
+			}
+			nextMatch, err := e.callHOFFn(ctx, evalCtx, nextFn, []interface{}{})
+			if err != nil {
+				return nil, err
+			}
+			currentMatch = nextMatch
+		}
+		return result, nil
 	default:
 		return nil, fmt.Errorf("pattern must be string or regex")
 	}
 
-	// Get limit if provided
-	limit := -1
-	if len(args) > 2 && args[2] != nil {
-		limitNum, err := e.toNumber(args[2])
-		if err != nil {
-			return nil, err
-		}
-		limit = int(limitNum)
-	}
-
-	// Find all matches
+	// Find all matches (for string/regex patterns; custom matcher handled above)
 	matches := regexPattern.FindAllStringSubmatchIndex(str, limit)
 	if matches == nil {
 		return []interface{}{}, nil

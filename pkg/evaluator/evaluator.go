@@ -95,6 +95,13 @@ func (e *Evaluator) Eval(ctx context.Context, expr *types.Expression, data inter
 	// Create evaluation context
 	evalCtx := NewContext(data)
 
+	// Initialise a shared depth counter for this evaluation tree.
+	// evalNode increments/decrements it on every node visit (stack-style),
+	// matching the JSONata JS test runner's timeboxExpression semantics.
+	if e.opts.MaxDepth > 0 {
+		ctx = withNewRecurseDepthPtr(ctx)
+	}
+
 	// Evaluate the AST
 	result, err := e.evalNode(ctx, expr.AST(), evalCtx)
 	if err != nil {
@@ -103,6 +110,10 @@ func (e *Evaluator) Eval(ctx context.Context, expr *types.Expression, data inter
 
 	// Convert types.Null to nil before returning
 	result = e.convertNullToNil(result)
+
+	// Unwrap any contextBoundValues that escaped to the top level
+	// (e.g. from @$var or #$var expressions at the end of a path with no further steps)
+	result = unwrapCVsDeep(result)
 
 	// Singleton array unwrapping: JSONata unwraps singleton arrays at the top level
 	// UNLESS the expression has KeepArray flag set (e.g., using [] syntax)
@@ -158,6 +169,11 @@ func (e *Evaluator) EvalWithBindings(ctx context.Context, expr *types.Expression
 	evalCtx := NewContext(data)
 	evalCtx.SetBindings(bindings)
 
+	// Initialise a shared depth counter for this evaluation tree.
+	if e.opts.MaxDepth > 0 {
+		ctx = withNewRecurseDepthPtr(ctx)
+	}
+
 	// Evaluate the AST
 	result, err := e.evalNode(ctx, expr.AST(), evalCtx)
 	if err != nil {
@@ -165,7 +181,12 @@ func (e *Evaluator) EvalWithBindings(ctx context.Context, expr *types.Expression
 	}
 
 	// Convert types.Null to nil before returning
-	return e.convertNullToNil(result), nil
+	result = e.convertNullToNil(result)
+
+	// Unwrap any contextBoundValues that escaped to the top level
+	result = unwrapCVsDeep(result)
+
+	return result, nil
 }
 
 // EvalOption configures evaluation behavior.

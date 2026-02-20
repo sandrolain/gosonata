@@ -94,6 +94,8 @@ var precedence = map[TokenType]int{
 	TokenBracketOpen:  80, // [
 	TokenBraceOpen:    80, // {
 	TokenParenOpen:    80, // (
+	TokenAt:           80, // @ (context variable binding)
+	TokenHash:         80, // # (positional variable binding)
 }
 
 // getPrecedence returns the precedence of a token type.
@@ -256,6 +258,10 @@ func (p *Parser) parseInfix(left *types.ASTNode) (*types.ASTNode, error) {
 		return p.parseApply(left)
 	case TokenSort:
 		return p.parseSort(left)
+	case TokenAt:
+		return p.parseContextBind(left)
+	case TokenHash:
+		return p.parseIndexBind(left)
 	case TokenAssign:
 		return p.parseAssignment(left)
 	case TokenPlus, TokenMinus, TokenMult, TokenDiv, TokenMod,
@@ -675,6 +681,63 @@ func (p *Parser) parsePath(left *types.ASTNode) (*types.ASTNode, error) {
 		node.KeepArray = true
 	}
 
+	return node, nil
+}
+
+// parseContextBind parses the context variable binding operator (@$var).
+// Syntax: expr@$var — binds each item of expr to $var while keeping the parent context.
+// Errors:
+//   - S0214: @ not followed by a $variable
+//   - S0215: @ cannot follow a filter predicate [...]
+//   - S0216: @ cannot follow an order-by clause ^(...)
+func (p *Parser) parseContextBind(left *types.ASTNode) (*types.ASTNode, error) {
+	pos := p.current.Position
+	p.advance() // skip '@'
+
+	// Parse RHS — must be a $variable
+	rhs, err := p.parseExpression(precedence[TokenAt])
+	if err != nil {
+		return nil, err
+	}
+	if rhs == nil || rhs.Type != types.NodeVariable {
+		return nil, p.error(types.ErrContextVarIllegal, "The '@' operator requires a variable binding (e.g. @$var)")
+	}
+
+	// S0215: @ cannot follow a filter predicate
+	if left.Type == types.NodeFilter {
+		return nil, p.error(types.ErrContextAfterFilter, "a context variable binding must precede any predicates on a step")
+	}
+	// S0216: @ cannot follow an order-by clause
+	if left.Type == types.NodeSort {
+		return nil, p.error(types.ErrContextAfterSort, "a context variable binding must precede the 'order-by' clause on a step")
+	}
+
+	node := types.NewASTNode(types.NodeContext, pos)
+	node.LHS = left
+	node.RHS = rhs
+	return node, nil
+}
+
+// parseIndexBind parses the positional variable binding operator (#$var).
+// Syntax: expr#$var — binds the 0-based position of each item to $var.
+// Errors:
+//   - S0214: # not followed by a $variable
+func (p *Parser) parseIndexBind(left *types.ASTNode) (*types.ASTNode, error) {
+	pos := p.current.Position
+	p.advance() // skip '#'
+
+	// Parse RHS — must be a $variable
+	rhs, err := p.parseExpression(precedence[TokenHash])
+	if err != nil {
+		return nil, err
+	}
+	if rhs == nil || rhs.Type != types.NodeVariable {
+		return nil, p.error(types.ErrContextVarIllegal, "The '#' operator requires a variable binding (e.g. #$var)")
+	}
+
+	node := types.NewASTNode(types.NodeIndex, pos)
+	node.LHS = left
+	node.RHS = rhs
 	return node, nil
 }
 

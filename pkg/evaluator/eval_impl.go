@@ -14,21 +14,150 @@ import (
 	"github.com/sandrolain/gosonata/pkg/types"
 )
 
-// evalNode evaluates an AST node in the given context.
-// recurseDepthKey is used to store recursion depth in context.Context.
-type recurseDepthKey struct{}
-
-// getRecurseDepth returns the current lambda recursion depth from a context.Context.
-func getRecurseDepth(ctx context.Context) int {
-	if d, ok := ctx.Value(recurseDepthKey{}).(int); ok {
-		return d
-	}
-	return 0
+// contextBoundValue carries a value together with variable bindings (from @$ and #$ operators)
+// and the parent context data (needed for @ context rewind semantics and % parent operator).
+// This type is internal and only travels within evalPath/evalFilter iterations.
+type contextBoundValue struct {
+	value     interface{}            // current context data (used as $ for evaluation)
+	parent    interface{}            // preceding context data (used by @ to rewind context)
+	bindings  map[string]interface{} // inherited variable bindings ($var → value)
+	parentObj interface{}            // the containing object for % operator (distinct from @ semantics)
 }
 
-// withRecurseDepth returns a context.Context with incremented recursion depth.
-func withRecurseDepth(ctx context.Context, depth int) context.Context {
-	return context.WithValue(ctx, recurseDepthKey{}, depth)
+// extractBoundItem unpacks a contextBoundValue, returning value and bindings (empty map if plain).
+func extractBoundItem(item interface{}) (value interface{}, bindings map[string]interface{}) {
+	if cv, ok := item.(*contextBoundValue); ok {
+		b := cv.bindings
+		if b == nil {
+			b = map[string]interface{}{}
+		}
+		return cv.value, b
+	}
+	return item, nil
+}
+
+// mergeBoundBindings merges parentBindings into a result item, wrapping or upgrading its cv.
+// parentBindings take lower priority than child's own bindings.
+func mergeBoundBindings(item interface{}, parentBindings map[string]interface{}, parentValue interface{}) interface{} {
+	if len(parentBindings) == 0 {
+		return item
+	}
+	if cv, ok := item.(*contextBoundValue); ok {
+		merged := make(map[string]interface{}, len(parentBindings)+len(cv.bindings))
+		for k, v := range parentBindings {
+			merged[k] = v
+		}
+		for k, v := range cv.bindings { // child overrides
+			merged[k] = v
+		}
+		return &contextBoundValue{value: cv.value, parent: cv.parent, bindings: merged}
+	}
+	// Wrap plain value with parent bindings
+	return &contextBoundValue{value: item, parent: parentValue, bindings: copyBindings(parentBindings)}
+}
+
+// copyBindings makes a shallow copy of a binding map.
+func copyBindings(b map[string]interface{}) map[string]interface{} {
+	if len(b) == 0 {
+		return nil
+	}
+	c := make(map[string]interface{}, len(b))
+	for k, v := range b {
+		c[k] = v
+	}
+	return c
+}
+
+// applyBindingsToCtx sets all bindings onto an EvalContext.
+func applyBindingsToCtx(ctx *EvalContext, bindings map[string]interface{}) {
+	for k, v := range bindings {
+		ctx.SetBinding(k, v)
+	}
+}
+
+// unwrapCVsDeep recursively extracts plain values from contextBoundValues.
+// This is used when CVs must be invisible to operators (equality, arithmetic, etc.)
+// and at the final return point of evaluation.
+func unwrapCVsDeep(v interface{}) interface{} {
+	switch val := v.(type) {
+	case *contextBoundValue:
+		return unwrapCVsDeep(val.value)
+	case []interface{}:
+		// Check if any items (at any depth) need unwrapping
+		needsUnwrap := false
+		for _, item := range val {
+			switch item.(type) {
+			case *contextBoundValue, []interface{}, *OrderedObject:
+				needsUnwrap = true
+			}
+			if needsUnwrap {
+				break
+			}
+		}
+		if !needsUnwrap {
+			return val
+		}
+		result := make([]interface{}, len(val))
+		for i, item := range val {
+			result[i] = unwrapCVsDeep(item)
+		}
+		return result
+	case *OrderedObject:
+		// Unwrap CVs inside OrderedObject values
+		for k, ov := range val.Values {
+			unwrapped := unwrapCVsDeep(ov)
+			val.Values[k] = unwrapped
+		}
+		return val
+	default:
+		return v
+	}
+}
+
+// evalNode evaluates an AST node in the given context.
+// recurseDepthKey stores a *int pointer so depth can be incremented/decremented (stack-style)
+// matching JSONata JS semantics where depth is the maximum current call stack depth.
+type recurseDepthKey struct{}
+
+// tcoTailKey is used to mark a context as being in TCO tail position.
+// When set, tail calls return a tcoThunk instead of evaluating recursively.
+type tcoTailKey struct{}
+
+// tcoThunk represents a pending tail-call invocation (used for trampolining).
+type tcoThunk struct {
+	lambda *Lambda
+	args   []interface{}
+}
+
+// getRecurseDepthPtr returns the depth counter pointer from the context, creating one if absent.
+func getRecurseDepthPtr(ctx context.Context) *int {
+	if p, ok := ctx.Value(recurseDepthKey{}).(*int); ok {
+		return p
+	}
+	return nil
+}
+
+// withNewRecurseDepthPtr returns a context that carries a fresh depth counter pointer.
+// Call this once at the start of each top-level evaluation.
+func withNewRecurseDepthPtr(ctx context.Context) context.Context {
+	d := 0
+	return context.WithValue(ctx, recurseDepthKey{}, &d)
+}
+
+// withTCOTail returns a context flagging that we are in tail position (TCO).
+func withTCOTail(ctx context.Context) context.Context {
+	return context.WithValue(ctx, tcoTailKey{}, true)
+}
+
+// isTCOTail returns true if the context is in tail position.
+func isTCOTail(ctx context.Context) bool {
+	v, _ := ctx.Value(tcoTailKey{}).(bool)
+	return v
+}
+
+// withoutTCOTail returns a context without the tail position flag.
+func withoutTCOTail(ctx context.Context) context.Context {
+	return context.WithValue(ctx, tcoTailKey{}, false)
 }
 
 func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
@@ -39,9 +168,16 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 	default:
 	}
 
-	// Check recursion depth
-	if getRecurseDepth(ctx) > e.opts.MaxDepth {
-		return nil, types.NewError(types.ErrUndefinedVariable, "maximum recursion depth exceeded", -1)
+	// Track and check evaluation depth (stack-style, matching JSONata JS semantics).
+	// Depth is the current nesting level of evalNode calls; it is incremented on entry
+	// and decremented on exit so that only the maximum live stack depth is counted.
+	if p := getRecurseDepthPtr(ctx); p != nil {
+		*p++
+		if *p > e.opts.MaxDepth {
+			*p--
+			return nil, types.NewError(types.ErrUndefinedVariable, "maximum recursion depth exceeded", -1)
+		}
+		defer func() { *p-- }()
 	}
 
 	if node == nil {
@@ -107,6 +243,10 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 		return e.evalTransformNode(ctx, evalCtx.Data(), node, evalCtx)
 	case types.NodeParent:
 		return e.evalParent(node, evalCtx)
+	case types.NodeContext:
+		return e.evalContextBind(ctx, node, evalCtx)
+	case types.NodeIndex:
+		return e.evalIndexBind(ctx, node, evalCtx)
 	default:
 		return nil, fmt.Errorf("unsupported node type: %s", node.Type)
 	}
@@ -154,11 +294,18 @@ func (e *Evaluator) evalNameString(name string, evalCtx *EvalContext) (interface
 
 	if obj, ok := data.(map[string]interface{}); ok {
 		if value, exists := obj[name]; exists {
+			// JSON null (nil from encoding/json) becomes types.Null to distinguish from undefined
+			if value == nil {
+				return types.NullValue, nil
+			}
 			return value, nil
 		}
 	}
 	if obj, ok := data.(*OrderedObject); ok {
 		if value, exists := obj.Get(name); exists {
+			if value == nil {
+				return types.NullValue, nil
+			}
 			return value, nil
 		}
 	}
@@ -269,37 +416,60 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 	keepArray := node.KeepArray || hasKeepArrayInChain(node.LHS)
 
 	// Special case: if RHS is a prefix object constructor (expr.{...}),
-	// do grouping evaluation instead of simple array map
-	if node.RHS.Type == types.NodeObject && node.RHS.LHS == nil {
-		// This is path.{...} applied to an array
-		if arr, ok := left.([]interface{}); ok {
-			// Create a modified node for grouping evaluation
-			groupNode := &types.ASTNode{
-				Type:        types.NodeObject,
-				Value:       node.RHS.Value,
-				Expressions: node.RHS.Expressions,
-				LHS:         &types.ASTNode{Type: types.NodeVariable, Value: ""}, // Placeholder for left
-				IsGrouping:  false,                                               // Prefix constructor, not infix
-			}
-			// Manually set up the grouping evaluation
-			return e.evalObjectGroupedWithArray(ctx, groupNode, evalCtx, arr)
-		}
+	// do grouping evaluation instead of simple array map.
+	// BUT only if there are no contextBoundValues (from @$ / #$ operators) in the array,
+	// because those carry per-item bindings that must be applied during per-item evaluation.
+	// Note: we intentionally do NOT optimize this into evalObjectGroupedWithArray
+	// when the items might need % (parent) operator support -- let the normal
+	// per-item loop handle those, so that each item's NewArrayItemContext provides
+	// the correct parent chain for % to walk up.
+
+	// Check if left is an array (or a single contextBoundValue) - JSONata applies path to each element
+	// Unwrap a single contextBoundValue to allow the single-item path to work correctly
+	if singleCV, isCV := left.(*contextBoundValue); isCV {
+		left = []interface{}{singleCV}
 	}
 
-	// Check if left is an array - JSONata applies path to each element
 	if arr, ok := left.([]interface{}); ok {
 		// Special case: if RHS is an infix object constructor (node.RHS.LHS != nil),
-		// apply the constructor to each item, then merge all results
-		if node.RHS.Type == types.NodeObject && node.RHS.LHS != nil {
+		// and no inherited bindings, apply the constructor to each item, then merge all results
+		hasBindings := false
+		for _, item := range arr {
+			if _, ok := item.(*contextBoundValue); ok {
+				hasBindings = true
+				break
+			}
+		}
+		if !hasBindings && node.RHS.Type == types.NodeObject && node.RHS.LHS != nil {
 			return e.evalPathInfixObjectConstructor(ctx, node.RHS, arr, evalCtx)
 		}
 
 		// Apply path to each element of the array
 		result := make([]interface{}, 0, len(arr))
 		for _, item := range arr {
-			// Create context with item as data, marked as array iteration context
-			// (so that % operator can find the correct parent)
-			itemCtx := evalCtx.NewArrayItemContext(item)
+			// Extract value and bindings from contextBoundValue if present
+			actualItem, inheritedBindings := extractBoundItem(item)
+			// For @$var CVs, the parent field holds the rewound context for the next path step.
+			// Use that as the execution context; for #$var or plain items, use the value itself.
+			contextData := actualItem
+			if cv, ok := item.(*contextBoundValue); ok && cv.parent != nil {
+				contextData = cv.parent
+			}
+
+			// Create context with appropriate data for the next path step
+			var itemCtx *EvalContext
+			if cv, ok := item.(*contextBoundValue); ok && cv.parentObj != nil && cv.parent == nil {
+				// This CV carries parent-object info for % semantics (not @$ rewind).
+				// Create a parent context with the container object, then create the array item context.
+				parentObjCtx := evalCtx.NewChildContext(cv.parentObj)
+				itemCtx = parentObjCtx.NewArrayItemContext(contextData)
+			} else {
+				itemCtx = evalCtx.NewArrayItemContext(contextData)
+			}
+			// Apply inherited bindings from @$ / #$ operators
+			if len(inheritedBindings) > 0 {
+				applyBindingsToCtx(itemCtx, inheritedBindings)
+			}
 
 			// Evaluate right side in item context
 			var value interface{}
@@ -309,8 +479,7 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 				value, err = e.evalName(node.RHS, itemCtx)
 			} else if node.RHS.Type == types.NodeFunction && node.RHS.LHS != nil && node.RHS.LHS.Type == types.NodeLambda {
 				// Special case: lambda call in path context
-				// The item should be injected as the first argument
-				value, err = e.evalFunctionWithContextInjection(ctx, node.RHS, itemCtx, item)
+				value, err = e.evalFunctionWithContextInjection(ctx, node.RHS, itemCtx, actualItem)
 			} else {
 				value, err = e.evalNode(ctx, node.RHS, itemCtx)
 			}
@@ -319,14 +488,45 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 			}
 
 			// Flatten: if value is an array, append its elements
-			// UNLESS the RHS is an array constructor [expression], which preserves structure
-			// Otherwise append the value itself (if not nil)
+			// UNLESS the RHS is an explicit array constructor or a filter wrapping one,
+			// in which case we keep the inner array intact.
 			if value != nil {
-				// If RHS is an explicit array constructor, don't flatten the result
-				if subArr, isArr := value.([]interface{}); isArr && node.RHS.Type != types.NodeArray {
-					result = append(result, subArr...)
+				// Check if the RHS is an array constructor (possibly wrapped in a filter with [])
+				rhsIsArrayCtor := node.RHS.Type == types.NodeArray ||
+					(node.RHS.Type == types.NodeFilter && node.RHS.LHS != nil && node.RHS.LHS.Type == types.NodeArray)
+
+				if len(inheritedBindings) > 0 {
+					// Propagate inherited bindings to each sub-result so they remain accessible
+					// in subsequent path steps (@$ / #$ cross-join semantics).
+					// parent=nil: the sub-result becomes the new context (no further rewind).
+					if subArr, isArr := value.([]interface{}); isArr && !rhsIsArrayCtor {
+						for _, subItem := range subArr {
+							result = append(result, mergeBoundBindings(subItem, inheritedBindings, nil))
+						}
+					} else {
+						result = append(result, mergeBoundBindings(value, inheritedBindings, nil))
+					}
 				} else {
-					result = append(result, value)
+					if subArr, isArr := value.([]interface{}); isArr && !rhsIsArrayCtor {
+						// When flattening a sub-array, wrap each sub-item with parent info
+						// so that the % (parent) operator can find the containing object.
+						// Each sub-item's parent is the current item (e.g., Products' parent = Order).
+						for _, subItem := range subArr {
+							// Only wrap if the sub-item doesn't already have parent info
+							if _, alreadyCV := subItem.(*contextBoundValue); !alreadyCV {
+								result = append(result, &contextBoundValue{
+									value:     subItem,
+									parent:    nil,
+									bindings:  map[string]interface{}{},
+									parentObj: actualItem,
+								})
+							} else {
+								result = append(result, subItem)
+							}
+						}
+					} else {
+						result = append(result, value)
+					}
 				}
 			}
 		}
@@ -336,13 +536,29 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 			return nil, nil
 		}
 
-		// If keepArray is false and we have a singleton, unwrap it
-		// This implements the JSONata behavior where singleton arrays are flattened
-		// unless explicitly marked to keep (e.g., with [] syntax)
+		// Unwrap contextBoundValues from the final result only if there's no further
+		// wrapping needed: if all results are plain values, return directly.
+		// If results are cvs, keep them (they'll be handled by the next path/filter step
+		// or unwrapped by the final return).
+		allPlain := true
+		for _, r := range result {
+			if _, ok := r.(*contextBoundValue); ok {
+				allPlain = false
+				break
+			}
+		}
+		if allPlain {
+			// Standard result: unwrap singletons
+			if len(result) == 1 && !keepArray {
+				return result[0], nil
+			}
+			return result, nil
+		}
+		// Results contain cvs – leave them for the next stage; do NOT unwrap singletons
+		// (caller is another evalPath or evalFilter which will handle them)
 		if len(result) == 1 && !keepArray {
 			return result[0], nil
 		}
-
 		return result, nil
 	}
 
@@ -737,6 +953,10 @@ func hasKeepArrayInChain(node *types.ASTNode) bool {
 func (e *Evaluator) evalBinary(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
 	op := node.Value.(string)
 
+	// Binary operations are never in tail position for their operands.
+	// Remove TCO tail flag to prevent incorrect tail-call optimization of sub-expressions.
+	ctx = withoutTCOTail(ctx)
+
 	// Handle special operators
 	switch op {
 	case "and":
@@ -763,6 +983,10 @@ func (e *Evaluator) evalBinary(ctx context.Context, node *types.ASTNode, evalCtx
 	if err != nil {
 		return nil, err
 	}
+
+	// Unwrap contextBoundValues: CVs must not be visible to operators
+	left = unwrapCVsDeep(left)
+	right = unwrapCVsDeep(right)
 
 	// Apply operator
 	switch op {
@@ -970,7 +1194,7 @@ func (e *Evaluator) evalObjectGroupedWithArray(ctx context.Context, node *types.
 			if item == nil {
 				continue
 			}
-			itemCtx := evalCtx.NewChildContext(item)
+			itemCtx := evalCtx.NewArrayItemContext(item)
 			keys, err := e.evalObjectKeys(ctx, pair.LHS, itemCtx, false)
 			if err != nil {
 				return nil, err
@@ -1010,7 +1234,7 @@ func (e *Evaluator) evalObjectGroupedWithArray(ctx context.Context, node *types.
 					pairIdx := pairPerKey[key]
 					pair := node.Expressions[pairIdx]
 
-					itemCtx := evalCtx.NewChildContext(item)
+					itemCtx := evalCtx.NewArrayItemContext(item)
 					value, err := e.evalNode(ctx, pair.RHS, itemCtx)
 					if err != nil {
 						return nil, err
@@ -1091,6 +1315,10 @@ func (e *Evaluator) evalObjectLiteral(ctx context.Context, node *types.ASTNode, 
 		if value == nil {
 			continue
 		}
+
+		// Unwrap any contextBoundValues that escaped from path expressions (e.g. #$i bindings).
+		// The bindings have already been consumed by inner expressions; we only need the plain value.
+		value = unwrapCVsDeep(value)
 
 		for _, key := range keys {
 			if _, exists := result.Values[key]; exists {
@@ -1244,49 +1472,12 @@ func (e *Evaluator) evalObjectKeys(ctx context.Context, keyNode *types.ASTNode, 
 		return []string{keyNode.Value.(string)}, nil
 	}
 
-	// For name nodes with spaces, use the name literally ONLY if literal=true
-	// Otherwise, evaluate the name like any other expression
-	if keyNode.Type == types.NodeName {
-		keyName := keyNode.Value.(string)
-		if literal {
-			// For literal mode, check if context data is array
-			// If so, validate that all items have the same string value for this key
-			data := evalCtx.Data()
-			if arr, ok := data.([]interface{}); ok && len(arr) > 0 {
-				// Context is array - validate the key values
-				keyVal, err := e.evalNode(ctx, keyNode, evalCtx)
-				if err != nil {
-					return nil, err
-				}
-				// If keyVal is array with mixed values, error
-				if keyArr, ok := keyVal.([]interface{}); ok {
-					if len(keyArr) == 0 {
-						return []string{keyName}, nil
-					}
-					// Check all values are strings and all equal
-					var firstVal string
-					for i, item := range keyArr {
-						if item == nil {
-							continue
-						}
-						str, ok := item.(string)
-						if !ok {
-							return nil, fmt.Errorf("T1003: Object key must be a string, got %T", item)
-						}
-						if i == 0 {
-							firstVal = str
-						} else if str != firstVal {
-							// Mixed values - cannot use as single key
-							return nil, fmt.Errorf("T1003: Object key must be a string")
-						}
-					}
-				}
-			}
-			// Use as literal field name
-			return []string{keyName}, nil
-		}
-		// Fall through to evaluate normally (even if name contains spaces)
-	}
+	// NodeName keys are ALWAYS evaluated as expressions (never treated as string literals).
+	// In JSONata: `{name: val}` evaluates `name` as a field path, not as the string "name".
+	// If the field does not exist (nil), the key is omitted (no entry created).
+	// This is true for both standalone and path-step object constructors.
+	// (String literal keys, e.g. `{"name": val}`, are handled above via NodeString.)
+	_ = literal
 
 	// Evaluate as expression
 	keyVal, err := e.evalNode(ctx, keyNode, evalCtx)
@@ -1447,14 +1638,18 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 	arr, isArray := collection.([]interface{})
 	if !isArray {
 		// If not an array, treat filter as conditional
-		// Evaluate predicate in context of the object
-		objCtx := evalCtx.NewChildContext(collection)
+		// Handle contextBoundValue transparently
+		actualCollection, collBindings := extractBoundItem(collection)
+		objCtx := evalCtx.NewChildContext(actualCollection)
+		if len(collBindings) > 0 {
+			applyBindingsToCtx(objCtx, collBindings)
+		}
 		match, err := e.evalNode(ctx, node.RHS, objCtx)
 		if err != nil {
 			return nil, err
 		}
 
-		// If predicate is true, return the object; otherwise nil
+		// If predicate is true, return the (original) object; otherwise nil
 		if e.isTruthy(match) {
 			return collection, nil
 		}
@@ -1464,8 +1659,14 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 	// Otherwise treat as array filter predicate
 	result := make([]interface{}, 0)
 	for _, item := range arr {
+		// Extract value and bindings from contextBoundValue if present
+		actualItem, inheritedBindings := extractBoundItem(item)
+
 		// Create context with item as data
-		itemCtx := evalCtx.NewChildContext(item)
+		itemCtx := evalCtx.NewChildContext(actualItem)
+		if len(inheritedBindings) > 0 {
+			applyBindingsToCtx(itemCtx, inheritedBindings)
+		}
 
 		// Evaluate filter expression
 		match, err := e.evalNode(ctx, node.RHS, itemCtx)
@@ -1475,7 +1676,7 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 
 		// Check if matches (truthy value)
 		if e.isTruthy(match) {
-			result = append(result, item)
+			result = append(result, item) // keep original item (may be a cv)
 		}
 	}
 
@@ -1489,19 +1690,22 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 
 // evalCondition evaluates a conditional expression.
 func (e *Evaluator) evalCondition(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	// Condition must NOT be in tail position - only branches can be tail.
+	condCtx := withoutTCOTail(ctx)
+
 	// Evaluate condition
-	condition, err := e.evalNode(ctx, node.LHS, evalCtx)
+	condition, err := e.evalNode(condCtx, node.LHS, evalCtx)
 	if err != nil {
 		return nil, err
 	}
 
 	// Check if condition is truthy
 	if e.isTruthy(condition) {
-		// Evaluate then branch
+		// Evaluate then branch (propagate tail position)
 		return e.evalNode(ctx, node.RHS, evalCtx)
 	}
 
-	// Evaluate else branch
+	// Evaluate else branch (propagate tail position)
 	if len(node.Expressions) > 0 && node.Expressions[0] != nil {
 		return e.evalNode(ctx, node.Expressions[0], evalCtx)
 	}
@@ -1513,8 +1717,10 @@ func (e *Evaluator) evalCondition(ctx context.Context, node *types.ASTNode, eval
 func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
 	// Check if this is a lambda/variable call (LHS contains lambda or variable) or built-in function call (Value contains name)
 	if node.LHS != nil {
-		// Lambda or variable call: evaluate first, then call it
-		callableValue, err := e.evalNode(ctx, node.LHS, evalCtx)
+		// Lambda or variable call: evaluate first, then call it.
+		// Arguments must NOT themselves be in tail position.
+		callCtx := withoutTCOTail(ctx)
+		callableValue, err := e.evalNode(callCtx, node.LHS, evalCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -1523,17 +1729,30 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 		switch fn := callableValue.(type) {
 		case *Lambda:
 			// User-defined lambda
-			// Evaluate arguments
+			// Evaluate arguments (never in tail position)
 			args := make([]interface{}, 0, len(node.Arguments))
 			for _, argNode := range node.Arguments {
-				arg, err := e.evalNode(ctx, argNode, evalCtx)
+				arg, err := e.evalNode(callCtx, argNode, evalCtx)
 				if err != nil {
 					return nil, err
 				}
+				// Unwrap contextBoundValues before passing to lambdas
+				arg = unwrapCVsDeep(arg)
 				args = append(args, arg)
 			}
 
-			// Call lambda
+			// TCO: if we are in tail position, apply signature validation and return a
+			// thunk instead of recursing. The callLambda trampoline will re-execute the
+			// body without growing the stack.
+			if isTCOTail(ctx) {
+				// Apply full signature validation (including auto-wrapping) before thunk.
+				if err2 := e.validateAndAdaptLambdaArgs(fn, args); err2 != nil {
+					return nil, err2
+				}
+				return &tcoThunk{lambda: fn, args: args}, nil
+			}
+
+			// Normal call
 			return e.callLambda(ctx, fn, args)
 
 		case *FunctionDef:
@@ -1541,10 +1760,12 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 			// Evaluate arguments
 			args := make([]interface{}, 0, len(node.Arguments))
 			for _, argNode := range node.Arguments {
-				arg, err := e.evalNode(ctx, argNode, evalCtx)
+				arg, err := e.evalNode(callCtx, argNode, evalCtx)
 				if err != nil {
 					return nil, err
 				}
+				// Unwrap contextBoundValues before passing to built-in functions
+				arg = unwrapCVsDeep(arg)
 				args = append(args, arg)
 			}
 
@@ -1588,6 +1809,8 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 		if err != nil {
 			return nil, err
 		}
+		// Unwrap contextBoundValues: built-in functions must not see internal CV wrappers
+		arg = unwrapCVsDeep(arg)
 		args = append(args, arg)
 	}
 
@@ -2380,7 +2603,12 @@ func (e *Evaluator) evalSort(ctx context.Context, node *types.ASTNode, evalCtx *
 			continue
 		}
 
-		itemCtx := evalCtx.NewChildContext(item)
+		// Extract actual value and bindings from contextBoundValue if present
+		actualSortItem, sortBindings := extractBoundItem(item)
+		itemCtx := evalCtx.NewChildContext(actualSortItem)
+		if len(sortBindings) > 0 {
+			applyBindingsToCtx(itemCtx, sortBindings)
+		}
 		keys := make([]interface{}, len(sortSpecs))
 
 		for specIdx, spec := range sortSpecs {
@@ -2573,6 +2801,8 @@ func (e *Evaluator) evalTransformNode(ctx context.Context, data interface{}, nod
 
 	// Apply update/delete to each matched node
 	for _, matchedNode := range matchList {
+		// Unwrap contextBoundValues - transforms need to mutate the actual objects
+		matchedNode = unwrapCVsDeep(matchedNode)
 		// Evaluate update expression in context of matched node
 		matchCtx := evalCtx.NewChildContext(matchedNode)
 		updateVal, err := e.evalNode(ctx, update, matchCtx)
@@ -2713,11 +2943,8 @@ func (e *Evaluator) callLambda(ctx context.Context, lambda *Lambda, args []inter
 	}
 
 	// Create new context with lambda's closure context as parent.
-	// Clone (not CloneDeeper) - recursion depth is tracked via context.Context key.
+	// Clone (not CloneDeeper) - recursion depth is tracked via the shared *int pointer in context.
 	lambdaCtx := lambda.Ctx.Clone()
-
-	// Increment recursion depth in context.Context to catch infinite recursion.
-	ctx = withRecurseDepth(ctx, getRecurseDepth(ctx)+1)
 
 	// Bind parameters
 	for i, param := range lambda.Params {
@@ -2727,8 +2954,94 @@ func (e *Evaluator) callLambda(ctx context.Context, lambda *Lambda, args []inter
 		// Optional parameters without args remain unbound
 	}
 
-	// Evaluate body
-	return e.evalNode(ctx, lambda.Body, lambdaCtx)
+	// Evaluate body using TCO trampolining.
+	// We mark the body context as "tail position" so that tail calls (lambda calls in
+	// tail position) return a tcoThunk instead of recursing. The trampoline loop below
+	// then re-executes without growing the Go call stack or the depth counter.
+	tcoCtx := withTCOTail(ctx)
+	var result interface{}
+	var err error
+	for {
+		result, err = e.evalNode(tcoCtx, lambda.Body, lambdaCtx)
+		if err != nil {
+			return nil, err
+		}
+		thunk, isThunk := result.(*tcoThunk)
+		if !isThunk {
+			break
+		}
+		// Trampoline: re-bind parameters and re-evaluate body without growing the stack.
+		lambda = thunk.lambda
+		args = thunk.args
+		lambdaCtx = lambda.Ctx.Clone()
+		for i, param := range lambda.Params {
+			if i < len(args) {
+				lambdaCtx.SetBinding(param, args[i])
+			}
+		}
+	}
+	return result, nil
+}
+
+// validateLambdaArgs validates argument count for a lambda (used before creating a TCO thunk).
+func (e *Evaluator) validateLambdaArgs(lambda *Lambda, args []interface{}) error {
+	if lambda.Signature != nil {
+		requiredCount := 0
+		for _, param := range lambda.Signature.Params {
+			if !param.Optional {
+				requiredCount++
+			}
+		}
+		if len(args) < requiredCount || len(args) > len(lambda.Signature.Params) {
+			if requiredCount == len(lambda.Signature.Params) {
+				return fmt.Errorf("lambda expects %d arguments, got %d", len(lambda.Signature.Params), len(args))
+			}
+			return fmt.Errorf("lambda expects %d-%d arguments, got %d", requiredCount, len(lambda.Signature.Params), len(args))
+		}
+	} else {
+		if len(args) > len(lambda.Params) {
+			return fmt.Errorf("lambda expects %d arguments, got %d", len(lambda.Params), len(args))
+		}
+	}
+	return nil
+}
+
+// validateAndAdaptLambdaArgs performs full signature validation including auto-wrapping.
+// args slice is mutated in-place (auto-wrapping may change element types).
+func (e *Evaluator) validateAndAdaptLambdaArgs(lambda *Lambda, args []interface{}) error {
+	if lambda.Signature != nil {
+		requiredCount := 0
+		for _, param := range lambda.Signature.Params {
+			if !param.Optional {
+				requiredCount++
+			}
+		}
+		if len(args) < requiredCount || len(args) > len(lambda.Signature.Params) {
+			if requiredCount == len(lambda.Signature.Params) {
+				return fmt.Errorf("lambda expects %d arguments, got %d", len(lambda.Signature.Params), len(args))
+			}
+			return fmt.Errorf("lambda expects %d-%d arguments, got %d", requiredCount, len(lambda.Signature.Params), len(args))
+		}
+		for i := range args {
+			if i >= len(lambda.Signature.Params) {
+				break
+			}
+			param := lambda.Signature.Params[i]
+			if param.Type == TypeArray {
+				if _, isArray := args[i].([]interface{}); !isArray {
+					args[i] = []interface{}{args[i]}
+				}
+			}
+			if err := param.ValidateArgument(args[i]); err != nil {
+				return err
+			}
+		}
+	} else {
+		if len(args) > len(lambda.Params) {
+			return fmt.Errorf("lambda expects %d arguments, got %d", len(lambda.Params), len(args))
+		}
+	}
+	return nil
 }
 
 // Helper functions
@@ -3398,6 +3711,128 @@ func (e *Evaluator) evalParent(node *types.ASTNode, evalCtx *EvalContext) (inter
 	}
 	// No array iteration context found — % is invalid here
 	return nil, types.NewError(types.ErrInvalidParentUse, "The % operator can only be used within a path that is a member of an array", node.Position)
+}
+
+// evalContextBind evaluates the context variable binding operator (@$var).
+// Semantics (from JSONata spec):
+//   - Evaluates LHS to get a sequence of items.
+//   - Each item is bound to $var.
+//   - The PARENT context (the data from which LHS was resolved) BECOMES the new current context
+//     for subsequent path steps.  This enables cross-collection joins.
+func (e *Evaluator) evalContextBind(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	varName := node.RHS.Value.(string) // e.g. "l" for @$l
+
+	// Determine parent data for the rewind:
+	// - When LHS is a path (A.B), parent = value of A evaluated in evalCtx
+	// - Otherwise, parent = evalCtx.Data() itself
+	var parentData interface{}
+	if node.LHS.Type == types.NodePath && node.LHS.LHS != nil {
+		var err error
+		parentData, err = e.evalNode(ctx, node.LHS.LHS, evalCtx)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		parentData = evalCtx.Data()
+	}
+
+	// Evaluate LHS to obtain the sequence of items
+	left, err := e.evalNode(ctx, node.LHS, evalCtx)
+	if err != nil {
+		return nil, err
+	}
+	if left == nil {
+		return nil, nil
+	}
+
+	arr, err := e.toArray(left)
+	if err != nil {
+		return nil, err
+	}
+	if len(arr) == 0 {
+		return nil, nil
+	}
+
+	result := make([]interface{}, 0, len(arr))
+	for _, item := range arr {
+		actualItem, existingBindings := extractBoundItem(item)
+
+		// Effective parent: if the item itself carried a parent (from a previous @$),
+		// use it; otherwise use the parent we just computed.
+		effectiveParent := parentData
+		if cv, ok := item.(*contextBoundValue); ok && cv.parent != nil {
+			effectiveParent = cv.parent
+		}
+
+		// Build new bindings: inherit parent's, then bind varName → current item
+		newBindings := make(map[string]interface{}, len(existingBindings)+1)
+		for k, v := range existingBindings {
+			newBindings[k] = v
+		}
+		newBindings[varName] = actualItem
+
+		result = append(result, &contextBoundValue{
+			value:    actualItem,      // original item (used for final output unwrapping)
+			parent:   effectiveParent, // rewind-to context for the very next path step
+			bindings: newBindings,
+		})
+	}
+
+	if len(result) == 1 && !node.KeepArray {
+		return result[0], nil
+	}
+	return result, nil
+}
+
+// evalIndexBind evaluates the positional variable binding operator (#$var).
+// Semantics: for each item at position i in the input sequence, binds $var = i (0-based).
+// The items themselves are unchanged; $var is available in subsequent filter/path steps.
+func (e *Evaluator) evalIndexBind(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
+	varName := node.RHS.Value.(string) // e.g. "i" for #$i
+
+	// Evaluate LHS to obtain the sequence of items
+	left, err := e.evalNode(ctx, node.LHS, evalCtx)
+	if err != nil {
+		return nil, err
+	}
+	if left == nil {
+		return nil, nil
+	}
+
+	arr, err := e.toArray(left)
+	if err != nil {
+		return nil, err
+	}
+	if len(arr) == 0 {
+		return nil, nil
+	}
+
+	result := make([]interface{}, 0, len(arr))
+	for i, item := range arr {
+		actualItem, existingBindings := extractBoundItem(item)
+		var existingParent interface{}
+		if cv, ok := item.(*contextBoundValue); ok {
+			existingParent = cv.parent
+		}
+
+		// Merge existing with position binding
+		newBindings := make(map[string]interface{}, len(existingBindings)+1)
+		for k, v := range existingBindings {
+			newBindings[k] = v
+		}
+		newBindings[varName] = float64(i)
+
+		result = append(result, &contextBoundValue{
+			value:    actualItem,
+			parent:   existingParent,
+			bindings: newBindings,
+		})
+	}
+
+	if len(result) == 1 && !node.KeepArray {
+		return result[0], nil
+	}
+	return result, nil
 }
 
 // compareValues compares two values and returns:

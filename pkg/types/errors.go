@@ -8,18 +8,21 @@ type ErrorCode string
 // Error codes based on JSONata reference implementation.
 const (
 	// S0xxx: Parser/Syntax errors
-	ErrStringNotClosed   ErrorCode = "S0101"
-	ErrNumberOutOfRange  ErrorCode = "S0102"
-	ErrUnsupportedEscape ErrorCode = "S0103"
-	ErrUnexpectedEnd     ErrorCode = "S0104"
-	ErrCommentNotClosed  ErrorCode = "S0106"
-	ErrSyntaxError       ErrorCode = "S0201"
-	ErrExpectedToken     ErrorCode = "S0202"
-	ErrExpectedKeyword   ErrorCode = "S0203"
-	ErrInvalidPathStep   ErrorCode = "S0213" // digit field name after dot
-	ErrInvalidParentUse  ErrorCode = "S0217" // parent operator (%) in invalid context
-	ErrEmptyRegex        ErrorCode = "S0301"
-	ErrRegexNotClosed    ErrorCode = "S0302"
+	ErrStringNotClosed    ErrorCode = "S0101"
+	ErrNumberOutOfRange   ErrorCode = "S0102"
+	ErrUnsupportedEscape  ErrorCode = "S0103"
+	ErrUnexpectedEnd      ErrorCode = "S0104"
+	ErrCommentNotClosed   ErrorCode = "S0106"
+	ErrSyntaxError        ErrorCode = "S0201"
+	ErrExpectedToken      ErrorCode = "S0202"
+	ErrExpectedKeyword    ErrorCode = "S0203"
+	ErrInvalidPathStep    ErrorCode = "S0213" // digit field name after dot
+	ErrContextVarIllegal  ErrorCode = "S0214" // @ or # not followed by $var
+	ErrContextAfterFilter ErrorCode = "S0215" // @ cannot follow a filter predicate
+	ErrContextAfterSort   ErrorCode = "S0216" // @ cannot follow an order-by clause
+	ErrInvalidParentUse   ErrorCode = "S0217" // parent operator (%) in invalid context
+	ErrEmptyRegex         ErrorCode = "S0301"
+	ErrRegexNotClosed     ErrorCode = "S0302"
 	// T0xxx: Type errors
 	ErrArgumentCountMismatch ErrorCode = "T0410"
 	ErrCannotConvertNumber   ErrorCode = "T1001"

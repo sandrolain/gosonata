@@ -35,6 +35,11 @@ func EvaluateTestCase(ctx context.Context, testCase *TestCase, data interface{})
 	// Create evaluator
 	eval := evaluator.New()
 
+	// Apply recursion depth limit if specified (test-suite uses this to expect U1001 errors)
+	if testCase.Depth != nil {
+		eval = evaluator.New(evaluator.WithMaxDepth(*testCase.Depth))
+	}
+
 	// Evaluate expression with bindings
 	result, err := eval.EvalWithBindings(ctx, expr, data, testCase.Bindings)
 

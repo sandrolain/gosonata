@@ -337,7 +337,8 @@ func TestConformanceWithExpected(t *testing.T) {
 	testCases := []TestCase{
 		{Name: "simple addition", Query: "2 + 3", Data: nil, Expected: 5.0},
 		{Name: "string concat", Query: `"hello" & " world"`, Data: nil, Expected: "hello world"},
-		{Name: "array length", Query: "$length([1,2,3])", Data: nil, Expected: 3.0},
+		// Note: $length() only accepts strings per JSONata spec; arrays give T0410
+		// {Name: "array length", Query: "$length([1,2,3])", Data: nil, Expected: 3.0},
 		{Name: "field access", Query: "name", Data: map[string]interface{}{"name": "Alice"}, Expected: "Alice"},
 	}
 

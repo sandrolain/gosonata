@@ -60,6 +60,8 @@ const (
 	TokenDescendent // **
 	TokenCoalesce   // ??
 	TokenDefault    // ?:
+	TokenAt         // @  (context variable binding)
+	TokenHash       // #  (positional variable binding)
 
 	// Keyword operators
 	TokenAnd // and
@@ -150,6 +152,10 @@ func (tt TokenType) String() string {
 		return "??"
 	case TokenDefault:
 		return "?:"
+	case TokenAt:
+		return "@"
+	case TokenHash:
+		return "#"
 	case TokenAnd:
 		return "and"
 	case TokenOr:
@@ -192,6 +198,8 @@ var symbols1 = [...]TokenType{
 	'>': TokenGreater,
 	'^': TokenSort,
 	'&': TokenConcat,
+	'@': TokenAt,
+	'#': TokenHash,
 }
 
 // runeTokenType pairs a rune with its corresponding token type.
