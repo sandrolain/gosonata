@@ -11,7 +11,7 @@
 
 A high-performance Go implementation of [JSONata](https://jsonata.org/) 2.1.0+, designed for intensive data streaming scenarios.
 
-> **Status**: ✅ Conformance complete — 1852/1852 JSONata test suite cases passing
+> **Status**: ✅ Conformance complete — 1273/1273 official JSONata test suite cases + 249 imported conformance tests passing (100%)
 
 ## Features
 
@@ -20,7 +20,7 @@ A high-performance Go implementation of [JSONata](https://jsonata.org/) 2.1.0+, 
 - ✅ **Streaming**: Efficient handling of large JSON documents
 - ✅ **Spec Compliant**: Target 100% compatibility with JSONata 2.1.0+ specification
 - ✅ **Type Safe**: Strongly typed with comprehensive error handling
-- ✅ **Well Tested**: 1852/1852 conformance tests passing (100% of the JSONata test suite)
+- ✅ **Well Tested**: 1273/1273 official JSONata test suite cases passing (102 groups, 100%), plus 249 additional imported conformance tests
 - ✅ **Production Ready**: DoS protection, resource limits, structured logging
 
 ## What is JSONata?
@@ -157,7 +157,7 @@ task test:unit
 # With coverage
 task coverage
 
-# Run conformance tests (JSONata test suite — 1852 cases)
+# Run conformance tests (official JSONata test suite — 1273 cases in 102 groups)
 task test:conformance
 
 # Run GoSonata vs JSONata JS comparison report

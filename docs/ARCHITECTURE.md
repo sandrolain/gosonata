@@ -954,7 +954,7 @@ func WithMeter(meter metric.Meter) EvalOption
 - Complete AST node type system (23+ types)
 - Full evaluation engine with all JSONata semantics
 - 66+ built-in functions (string, numeric, array, aggregate, higher-order, date/time, encoding, special)
-- 1852/1852 conformance tests passing (100% of JSONata 2.1.0+ spec)
+- 1273/1273 official JSONata test suite cases passing (102 groups, 100%) + 249 imported conformance tests
 - `$` / `$$` / `@` / `#` / `%` operators, transforms, object constructors, lambdas, closures, partial application, recursive descent, regex
 
 #### Phase 7 (Next)
