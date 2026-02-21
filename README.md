@@ -80,10 +80,13 @@ if err != nil {
     log.Fatal(err)
 }
 
+ev := evaluator.New()
+ctx := context.Background()
+
 // Evaluate against different data
-result1, _ := expr.Eval(ctx, data1)
-result2, _ := expr.Eval(ctx, data2)
-result3, _ := expr.Eval(ctx, data3)
+result1, _ := ev.Eval(ctx, expr, data1)
+result2, _ := ev.Eval(ctx, expr, data2)
+result3, _ := ev.Eval(ctx, expr, data3)
 ```
 
 ### With Options

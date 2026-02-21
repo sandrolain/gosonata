@@ -1,7 +1,7 @@
 # GoSonata Architecture
 
 **Version**: 0.1.0-dev
-**Last Updated**: February 16, 2026
+**Last Updated**: February 21, 2026
 **Target**: JSONata 2.1.0+
 
 ## Table of Contents
@@ -399,7 +399,7 @@ if !ok {
 result, err := fn(ctx, args...)
 ```
 
-**Built-in Functions** (66+ planned):
+**Built-in Functions** (66+ implemented, 100% of JSONata 2.1.0+ spec):
 
 - String: 13 functions (`substring`, `uppercase`, `lowercase`, etc.)
 - Numeric: 12 functions (`sum`, `count`, `max`, `min`, etc.)
@@ -829,25 +829,27 @@ func BenchmarkEvaluation(b *testing.B) {
 
 ### Concurrent Evaluation
 
+> **Note**: `EvalMany` is a planned convenience API. Currently, callers can
+> achieve the same result by launching goroutines manually:
+
 ```go
-func (e *Evaluator) EvalMany(ctx context.Context, queries []string, data interface{}) ([]interface{}, error) {
-    results := make([]interface{}, len(queries))
-    errs := make([]error, len(queries))
-
-    var wg sync.WaitGroup
-    for i, query := range queries {
-        wg.Add(1)
-        go func(idx int, q string) {
-            defer wg.Done()
-            result, err := e.Eval(ctx, q, data)
-            results[idx] = result
-            errs[idx] = err
-        }(i, query)
-    }
-
-    wg.Wait()
-    return results, errors.Join(errs...)
+exprs := make([]*types.Expression, len(queries))
+for i, q := range queries {
+    exprs[i], _ = parser.Parse(q)
 }
+
+results := make([]interface{}, len(exprs))
+errs := make([]error, len(exprs))
+var wg sync.WaitGroup
+ev := evaluator.New()
+for i, expr := range exprs {
+    wg.Add(1)
+    go func(idx int, e *types.Expression) {
+        defer wg.Done()
+        results[idx], errs[idx] = ev.Eval(ctx, e, data)
+    }(i, expr)
+}
+wg.Wait()
 ```
 
 ### Thread-Safe Components
@@ -946,30 +948,28 @@ func WithMeter(meter metric.Meter) EvalOption
 
 ### Architecture Evolution
 
-#### Phase 1-4 (Current)
+#### Phase 1–6 (✅ Complete)
 
-- Core parser and evaluator
-- Basic built-in functions
-- Test suite integration
+- Hand-written recursive descent lexer and parser
+- Complete AST node type system (23+ types)
+- Full evaluation engine with all JSONata semantics
+- 66+ built-in functions (string, numeric, array, aggregate, higher-order, date/time, encoding, special)
+- 1852/1852 conformance tests passing (100% of JSONata 2.1.0+ spec)
+- `$` / `$$` / `@` / `#` / `%` operators, transforms, object constructors, lambdas, closures, partial application, recursive descent, regex
 
-#### Phase 5-6 (In Progress)
+#### Phase 7 (Next)
 
-- Advanced functions (higher-order, date/time)
-- Performance optimizations
-- Streaming support
-
-#### Phase 7 (Future)
-
-- Custom function registration
-- Expression caching
-- API stabilization
+- Expression result caching
+- Custom function registration via `FunctionRegistry`
+- Streaming API (`EvalStream`)
+- API stabilisation toward v1.0.0
 
 #### Phase 8+ (Roadmap)
 
 - Plugin system
 - WASM export
 - OpenTelemetry integration
-- Advanced streaming features
+- `EvalMany` convenience API
 
 ---
 

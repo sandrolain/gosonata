@@ -1,7 +1,7 @@
 # GoSonata API Reference
 
 **Version**: 0.1.0-dev
-**Last Updated**: February 16, 2026
+**Last Updated**: February 21, 2026
 **Go Version**: 1.26.0+
 
 ## Table of Contents
@@ -396,7 +396,7 @@ Creates a new evaluator with optional configuration.
 
 - Caching: disabled
 - Concurrency: enabled
-- MaxDepth: 100
+- MaxDepth: 10000
 - Timeout: 30 seconds
 
 **Example**:
@@ -454,7 +454,8 @@ Enables result caching for repeated queries.
 
 **Default**: `false`
 
-**Note**: Currently not implemented; planned for Phase 7.
+**Note**: The option is accepted but currently has no observable effect — result
+caching is not yet implemented. Accepted as API surface for a future release.
 
 **Example**:
 
@@ -494,7 +495,7 @@ Sets the maximum evaluation depth to prevent stack overflow.
 
 - `depth`: Maximum recursion depth
 
-**Default**: `100`
+**Default**: `10000`
 
 **Example**:
 
@@ -610,10 +611,14 @@ type Expression struct {
 }
 
 func (e *Expression) AST() *ASTNode
-func (e *Expression) Eval(ctx context.Context, data interface{}) (interface{}, error)
+func (e *Expression) Source() string
+func (e *Expression) Errors() []error
 ```
 
 Represents a compiled JSONata expression.
+
+> **Note**: `Expression` does not provide a self-contained `Eval()` method due to
+> import-cycle constraints. Always use `evaluator.New().Eval(ctx, expr, data)`.
 
 **Methods**:
 
@@ -637,30 +642,13 @@ ast := expr.AST()
 fmt.Println(ast.Type) // "path"
 ```
 
-#### Eval
+#### Source
 
 ```go
-func (e *Expression) Eval(ctx context.Context, data interface{}) (interface{}, error)
+func (e *Expression) Source() string
 ```
 
-Convenience method to evaluate the expression with a new evaluator.
-
-**Parameters**:
-
-- `ctx`: Context for timeout and cancellation
-- `data`: Input data
-
-**Returns**:
-
-- `interface{}`: Result value
-- `error`: Evaluation error
-
-**Example**:
-
-```go
-expr, _ := gosonata.Compile("$.name")
-result, err := expr.Eval(context.Background(), data)
-```
+Returns the original source string of the expression.
 
 ### ASTNode
 
@@ -817,14 +805,9 @@ func (Null) MarshalJSON() ([]byte, error)
 
 Represents JSONata `null` (distinct from `undefined`/`nil`).
 
-**Example**:
-
-```go
-result, _ := gosonata.Eval("null", nil)
-if result == types.NullValue {
-    fmt.Println("Result is null")
-}
-```
+> **Note**: `Eval()` converts `types.Null` to `nil` before returning, so both
+> JSON `null` and JSONata `undefined` are returned as Go `nil` at the API boundary.
+> `types.Null` is used only internally during evaluation.
 
 ---
 
@@ -849,7 +832,10 @@ func (r *FunctionRegistry) List() []string
 
 Manages built-in function registration and lookup.
 
-**Example**:
+> **Note**: `DefaultRegistry()` currently returns an **empty** registry — all
+> built-in functions are registered and invoked directly inside `pkg/evaluator`.
+> This package is the extension point for **custom** functions and future
+> user-supplied function registration.
 
 ```go
 import "github.com/sandrolain/gosonata/pkg/functions"
@@ -1143,22 +1129,18 @@ result, _ = gosonata.Eval("$average($.numbers)", data)
 fmt.Println(result) // Output: 3
 ```
 
-### Example 4: Reusable Expression
+### Example 4: Reusable Expression with Variable Bindings
 
 ```go
 // Compile once
 expr := gosonata.MustCompile("$.items[price > $threshold]")
-eval := evaluator.New()
+ev := evaluator.New()
 ctx := context.Background()
 
-// Create evaluation context with variable
-evalCtx := evaluator.NewContext(data1)
-evalCtx.SetBinding("threshold", 100.0)
-
-// Evaluate multiple times
-result1, _ := eval.Eval(ctx, expr, data1)
-result2, _ := eval.Eval(ctx, expr, data2)
-result3, _ := eval.Eval(ctx, expr, data3)
+// Use EvalWithBindings to pass per-call variable bindings
+result1, _ := ev.EvalWithBindings(ctx, expr, data1, map[string]interface{}{"threshold": 100.0})
+result2, _ := ev.EvalWithBindings(ctx, expr, data2, map[string]interface{}{"threshold": 200.0})
+result3, _ := ev.EvalWithBindings(ctx, expr, data3, map[string]interface{}{"threshold": 50.0})
 ```
 
 ### Example 5: Timeout Handling

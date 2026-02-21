@@ -1,7 +1,7 @@
 # GoSonata Differences and Implementation Notes
 
 **Version**: 0.1.0-dev
-**Last Updated**: February 16, 2026
+**Last Updated**: February 21, 2026
 **Reference**: JSONata 2.1.0+ (JavaScript)
 
 ## Table of Contents
@@ -64,8 +64,12 @@ var b interface{} = nil              // Undefined/missing
 
 - GoSonata uses `float64` as the primary numeric type (matching JavaScript)
 - Integers are automatically converted to `float64` when needed
-- `nil` represents JSONata's `undefined` (missing/absent values)
-- `types.Null{}` represents JSONata's explicit `null` literal
+- **At the public API boundary**, both JSONata `null` and `undefined` are returned as Go `nil`
+- `types.Null{}` is used **internally** during evaluation to distinguish `null` from `undefined`; it is converted to `nil` before returning from `Eval()` / `EvalWithBindings()`
+
+**Practical implication**: data passed to `Eval()` must use `float64` for numeric fields
+(not `int`). Use `json.Unmarshal` to deserialise data and all numbers will automatically
+be `float64`, matching the behaviour of JSONata JS.
 
 **Rationale**: This mapping preserves JSONata semantics while using Go's native types efficiently.
 
@@ -155,7 +159,7 @@ utf8.RuneCountInString("𝄞")  // 1 rune (correct)
 - Tests in `string-invalid-surrogates.json` are skipped (UTF-16 specific)
 - Cannot perfectly replicate JavaScript's surrogate pair behavior
 
-**Status**: Phase 1 functions handle UTF-8 correctly; surrogate tests skipped as non-applicable.
+**Status**: All string functions are fully implemented and handle UTF-8 correctly; surrogate tests skipped as non-applicable.
 
 ---
 
