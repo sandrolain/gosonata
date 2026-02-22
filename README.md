@@ -186,25 +186,25 @@ task bench:comparison:report
 
 | Expression | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| Simple path (`$.name`) | 388 | 880 | 8 |
-| Complex path (`$.users[0].address.city`) | 2,462 | 4,400 | 37 |
-| With functions (`$sum($.items.price)`) | 2,129 | 3,952 | 33 |
-| Nested lambda | 2,808 | 4,840 | 41 |
-| Object transformation | 3,333 | 5,512 | 47 |
+| Simple path (`$.name`) | 355 | 880 | 8 |
+| Complex path (`$.users[0].address.city`) | 2,039 | 4,400 | 37 |
+| With functions (`$sum($.items.price)`) | 1,875 | 3,952 | 33 |
+| Nested lambda | 2,394 | 4,840 | 41 |
+| Object transformation | 2,717 | 5,512 | 47 |
 
 ### Evaluator benchmarks — pre-compiled expression
 
 | Scenario | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| Simple path (1 user) | 699 | 664 | 11 |
-| Filter (10 users) | 1,111 | 872 | 15 |
-| Filter (100 users) | 1,234 | 968 | 17 |
-| Filter (1000 users) | 1,241 | 968 | 17 |
-| Aggregation (100 users) | 1,250 | 936 | 17 |
-| Transform (100 users) | 2,132 | 2,240 | 38 |
-| Sort (100 users) | 1,045 | 952 | 21 |
-| Arithmetic expression | 1,168 | 832 | 19 |
-| Concurrent eval (100 users) | 431 | 872 | 15 |
+| Simple path (1 user) | 588 | 568 | 9 |
+| Filter (10 users) | 884 | 728 | 12 |
+| Filter (100 users) | 994 | 824 | 14 |
+| Filter (1000 users) | 1,024 | 824 | 14 |
+| Aggregation (100 users) | 1,011 | 792 | 14 |
+| Transform (100 users) | 1,720 | 1,952 | 32 |
+| Sort (100 users) | 865 | 856 | 19 |
+| Arithmetic expression | 967 | 784 | 18 |
+| Concurrent eval (100 users) | 385 | 728 | 12 |
 
 > Filter, aggregation and sort evaluation cost stays nearly constant from 10 to 1000 items thanks to lazy path resolution.
 
@@ -215,17 +215,17 @@ Each scenario is verified to produce identical results in both engines (`TestRes
 
 | Scenario | GoSonata ns/op | JSONata JS ns/op | Speedup |
 |---|---|---|---|
-| SimplePath / 1 user | ~730 | ~1,600 | **~2×** |
-| Filter / 10 users | ~3,600 | ~12,500 | **~3.4×** |
-| Filter / 100 users | ~29,000 | ~120,000 | **~4.2×** |
-| Filter / 1000 users | ~317,000 | ~1,180,000 | **~3.7×** |
-| Aggregation / 10 users | ~2,000 | ~4,500 | **~2.3×** |
-| Aggregation / 100 users | ~9,900 | ~23,400 | **~2.4×** |
-| Transform / 10 users | ~4,600 | ~12,300 | **~2.7×** |
-| Transform / 100 users | ~22,700 | ~48,600 | **~2.1×** |
-| Sort / 10 users | ~7,700 | ~50,300 | **~6.6×** |
-| Sort / 100 users | ~107,000 | ~985,000 | **~9.2×** |
-| Arithmetic | ~1,300 | ~3,200 | **~2.5×** |
+| SimplePath / 1 user | ~850 | ~1,420 | **~1.7×** |
+| Filter / 10 users | ~3,200 | ~10,940 | **~3.4×** |
+| Filter / 100 users | ~18,500 | ~104,400 | **~5.6×** |
+| Filter / 1000 users | ~172,500 | ~960,100 | **~5.6×** |
+| Aggregation / 10 users | ~1,460 | ~3,480 | **~2.4×** |
+| Aggregation / 100 users | ~5,060 | ~19,280 | **~3.8×** |
+| Transform / 10 users | ~2,660 | ~10,070 | **~3.8×** |
+| Transform / 100 users | ~15,000 | ~45,760 | **~3.1×** |
+| Sort / 10 users | ~6,700 | ~44,300 | **~6.6×** |
+| Sort / 100 users | ~71,500 | ~823,100 | **~11.5×** |
+| Arithmetic | ~1,030 | ~2,610 | **~2.5×** |
 
 > JSONata JS timings measured within a single persistent Node.js process (no startup cost).
 > JS `evaluate()` is inherently async (Promise); Go is synchronous — the async overhead
