@@ -1,7 +1,6 @@
 package evaluator
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -166,7 +165,8 @@ func fnMatch(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []int
 // falling back until single digit; if single digit has no group, it expands to "".
 
 func jsonataExpandTemplate(template string, numGroups int, groups []string, fullMatch string) string {
-	var buf bytes.Buffer
+	buf := acquireBuf()
+	defer releaseBuf(buf)
 	i := 0
 	for i < len(template) {
 		if template[i] != '$' {
@@ -318,7 +318,8 @@ func fnReplace(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []i
 		}
 		allMatches := pattern.FindAllStringSubmatchIndex(str, maxMatches)
 
-		var buf bytes.Buffer
+		buf := acquireBuf()
+		defer releaseBuf(buf)
 		lastEnd := 0
 		for _, match := range allMatches {
 			matchStart := match[0]

@@ -1,6 +1,7 @@
 package evaluator
 
 import (
+	"bytes"
 	"regexp"
 	"sync"
 )
@@ -34,4 +35,27 @@ func mustCompileRegex(pattern string) *regexp.Regexp {
 		panic("evaluator: failed to compile static regex: " + err.Error())
 	}
 	return re
+}
+
+// bufPool is a process-wide pool of *bytes.Buffer used in hot string-building
+// paths (JSON marshaling, regex replacement, template expansion) to reduce GC
+// pressure from short-lived buffer allocations.
+var bufPool = sync.Pool{
+	New: func() interface{} { return new(bytes.Buffer) },
+}
+
+// acquireBuf returns a reset buffer from the pool.
+func acquireBuf() *bytes.Buffer {
+	b := bufPool.Get().(*bytes.Buffer)
+	b.Reset()
+	return b
+}
+
+// releaseBuf returns a buffer to the pool. Only buffers whose internal backing
+// array is reasonably sized are returned; very large ones are discarded to
+// prevent unbounded memory retention.
+func releaseBuf(b *bytes.Buffer) {
+	if b.Cap() <= 64*1024 { // 64 KB ceiling
+		bufPool.Put(b)
+	}
 }

@@ -3,6 +3,7 @@ package evaluator
 import (
 	"context"
 	"fmt"
+
 	"github.com/sandrolain/gosonata/pkg/types"
 )
 
@@ -92,8 +93,8 @@ func (e *Evaluator) evalPathInfixObjectConstructor(ctx context.Context, node *ty
 
 	// Merge semantics: return single object with grouped values
 	result := &OrderedObject{
-		Keys:   make([]string, 0),
-		Values: make(map[string]interface{}),
+		Keys:   make([]string, 0, len(groups)),
+		Values: make(map[string]interface{}, len(groups)),
 	}
 
 	for key := range groups {
@@ -185,8 +186,8 @@ func (e *Evaluator) evalObjectGroupedWithArray(ctx context.Context, node *types.
 		}
 
 		objResult := &OrderedObject{
-			Keys:   make([]string, 0),
-			Values: make(map[string]interface{}),
+			Keys:   make([]string, 0, len(node.Expressions)),
+			Values: make(map[string]interface{}, len(node.Expressions)),
 		}
 
 		// Find all keys that this item contributed to
@@ -254,7 +255,6 @@ func (e *Evaluator) evalObject(ctx context.Context, node *types.ASTNode, evalCtx
 	return e.evalObjectGrouped(ctx, node, evalCtx)
 }
 
-
 func (e *Evaluator) evalObjectLiteral(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
 	result := &OrderedObject{
 		Keys:   make([]string, 0, len(node.Expressions)),
@@ -297,7 +297,6 @@ func (e *Evaluator) evalObjectLiteral(ctx context.Context, node *types.ASTNode, 
 
 	return result, nil
 }
-
 
 func (e *Evaluator) evalObjectGrouped(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
 	collection, err := e.evalNode(ctx, node.LHS, evalCtx)
@@ -374,8 +373,8 @@ func (e *Evaluator) evalObjectGrouped(ctx context.Context, node *types.ASTNode, 
 			}
 
 			objResult := &OrderedObject{
-				Keys:   make([]string, 0),
-				Values: make(map[string]interface{}),
+				Keys:   make([]string, 0, len(node.Expressions)),
+				Values: make(map[string]interface{}, len(node.Expressions)),
 			}
 
 			// Find all keys that this item contributed to
@@ -407,8 +406,8 @@ func (e *Evaluator) evalObjectGrouped(ctx context.Context, node *types.ASTNode, 
 
 	// Merge semantics: return single object (used for infix grouping or non-one-to-one prefix)
 	result := &OrderedObject{
-		Keys:   make([]string, 0),
-		Values: make(map[string]interface{}),
+		Keys:   make([]string, 0, len(groups)),
+		Values: make(map[string]interface{}, len(groups)),
 	}
 
 	for key := range groups {
@@ -432,7 +431,6 @@ func (e *Evaluator) evalObjectGrouped(ctx context.Context, node *types.ASTNode, 
 
 	return result, nil
 }
-
 
 func (e *Evaluator) evalObjectKeys(ctx context.Context, keyNode *types.ASTNode, evalCtx *EvalContext, literal bool) ([]string, error) {
 	// For string literals, use the value directly

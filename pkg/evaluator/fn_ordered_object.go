@@ -1,7 +1,6 @@
 package evaluator
 
 import (
-	"bytes"
 	"encoding/json"
 )
 
@@ -20,7 +19,8 @@ func (o *OrderedObject) Get(key string) (interface{}, bool) {
 // MarshalJSON preserves key order during marshaling.
 
 func (o *OrderedObject) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
+	buf := acquireBuf()
+	defer releaseBuf(buf)
 	buf.WriteByte('{')
 	for i, key := range o.Keys {
 		if i > 0 {
@@ -39,5 +39,8 @@ func (o *OrderedObject) MarshalJSON() ([]byte, error) {
 		buf.Write(valueBytes)
 	}
 	buf.WriteByte('}')
-	return buf.Bytes(), nil
+	// buf.Bytes() points into the pooled buffer's memory; copy before releasing.
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	return result, nil
 }

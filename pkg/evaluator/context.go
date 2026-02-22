@@ -29,10 +29,9 @@ type EvalContext struct {
 // NewContext creates a new evaluation context.
 func NewContext(data interface{}) *EvalContext {
 	ctx := &EvalContext{
-		data:     data,
-		parent:   nil,
-		bindings: make(map[string]interface{}),
-		depth:    0,
+		data:  data,
+		depth: 0,
+		// bindings is nil; allocated lazily by SetBinding/SetBindings.
 	}
 	// Root context points to itself
 	ctx.root = ctx
@@ -42,11 +41,11 @@ func NewContext(data interface{}) *EvalContext {
 // NewChildContext creates a child context with new data.
 func (c *EvalContext) NewChildContext(data interface{}) *EvalContext {
 	return &EvalContext{
-		data:     data,
-		parent:   c,
-		root:     c.root, // Preserve root reference
-		bindings: make(map[string]interface{}),
-		depth:    c.depth + 1,
+		data:   data,
+		parent: c,
+		root:   c.root,
+		depth:  c.depth + 1,
+		// bindings is nil; allocated lazily.
 	}
 }
 
@@ -57,9 +56,9 @@ func (c *EvalContext) NewArrayItemContext(data interface{}) *EvalContext {
 		data:        data,
 		parent:      c,
 		root:        c.root,
-		bindings:    make(map[string]interface{}),
 		depth:       c.depth + 1,
 		isArrayItem: true,
+		// bindings is nil; allocated lazily.
 	}
 }
 
@@ -90,6 +89,9 @@ func (c *EvalContext) Depth() int {
 
 // SetBinding sets a variable binding.
 func (c *EvalContext) SetBinding(name string, value interface{}) {
+	if c.bindings == nil {
+		c.bindings = make(map[string]interface{})
+	}
 	c.bindings[name] = value
 }
 
@@ -111,6 +113,12 @@ func (c *EvalContext) GetBinding(name string) (interface{}, bool) {
 
 // SetBindings sets multiple variable bindings at once.
 func (c *EvalContext) SetBindings(bindings map[string]interface{}) {
+	if len(bindings) == 0 {
+		return
+	}
+	if c.bindings == nil {
+		c.bindings = make(map[string]interface{}, len(bindings))
+	}
 	for name, value := range bindings {
 		c.bindings[name] = value
 	}
@@ -118,9 +126,12 @@ func (c *EvalContext) SetBindings(bindings map[string]interface{}) {
 
 // Clone creates a shallow copy of the context with the same bindings.
 func (c *EvalContext) Clone() *EvalContext {
-	newBindings := make(map[string]interface{}, len(c.bindings))
-	for k, v := range c.bindings {
-		newBindings[k] = v
+	var newBindings map[string]interface{}
+	if len(c.bindings) > 0 {
+		newBindings = make(map[string]interface{}, len(c.bindings))
+		for k, v := range c.bindings {
+			newBindings[k] = v
+		}
 	}
 
 	return &EvalContext{
