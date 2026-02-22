@@ -3,6 +3,7 @@ package evaluator
 import (
 	"context"
 	"fmt"
+
 	"github.com/sandrolain/gosonata/pkg/types"
 )
 
@@ -81,15 +82,39 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 			return fn.Impl(ctx, e, evalCtx, args)
 
 		default:
+			// callableValue is nil when the variable is not bound in the eval context.
+			// This happens when a custom or built-in function is called via its $name
+			// syntax (e.g. $greet(...)) but "greet" has no variable binding.
+			// Fall through to the custom/built-in lookup using the variable name.
+			if callableValue == nil && node.LHS != nil && node.LHS.Type == types.NodeVariable {
+				varName, ok := node.LHS.Value.(string)
+				if ok {
+					if fnDef, found := e.getCustomFunction(varName); found {
+						args := make([]interface{}, 0, len(node.Arguments))
+						for _, argNode := range node.Arguments {
+							arg, err := e.evalNode(callCtx, argNode, evalCtx)
+							if err != nil {
+								return nil, err
+							}
+							arg = unwrapCVsDeep(arg)
+							args = append(args, arg)
+						}
+						return fnDef.Impl(ctx, e, evalCtx, args)
+					}
+				}
+			}
 			return nil, fmt.Errorf("expected lambda or function, got %T", callableValue)
 		}
 	}
 
-	// Built-in function call
+	// Built-in / custom function call
 	funcName := node.Value.(string)
 
-	// Get function definition
-	fnDef, ok := GetFunction(funcName)
+	// Check custom (user-registered) functions first, then built-ins.
+	fnDef, ok := e.getCustomFunction(funcName)
+	if !ok {
+		fnDef, ok = GetFunction(funcName)
+	}
 	if !ok {
 		return nil, fmt.Errorf("unknown function: %s", funcName)
 	}

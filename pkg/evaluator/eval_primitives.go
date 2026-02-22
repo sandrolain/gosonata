@@ -2,7 +2,7 @@ package evaluator
 
 import (
 	"fmt"
-	"regexp"
+
 	"github.com/sandrolain/gosonata/pkg/types"
 )
 
@@ -24,8 +24,9 @@ func (e *Evaluator) evalRegex(node *types.ASTNode) (interface{}, error) {
 		return nil, fmt.Errorf("invalid regex pattern type")
 	}
 
-	// Compile the regex pattern (already converted to Go format by lexer)
-	re, err := regexp.Compile(pattern)
+	// Compile the regex pattern (already converted to Go format by lexer).
+	// Uses the process-wide regex cache to avoid repeated compilation.
+	re, err := getOrCompileRegex(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("invalid regex pattern: %w", err)
 	}
@@ -45,7 +46,6 @@ func (e *Evaluator) evalName(node *types.ASTNode, evalCtx *EvalContext) (interfa
 	name := node.Value.(string)
 	return e.evalNameString(name, evalCtx)
 }
-
 
 func (e *Evaluator) evalNameString(name string, evalCtx *EvalContext) (interface{}, error) {
 	data := evalCtx.Data()

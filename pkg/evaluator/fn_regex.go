@@ -33,7 +33,7 @@ func fnMatch(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []int
 
 	switch pattern := args[1].(type) {
 	case string:
-		regexPattern, err = regexp.Compile(regexp.QuoteMeta(pattern))
+		regexPattern, err = getOrCompileRegex(regexp.QuoteMeta(pattern))
 		if err != nil {
 			return nil, fmt.Errorf("invalid regex pattern: %w", err)
 		}

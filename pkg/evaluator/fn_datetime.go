@@ -3,7 +3,6 @@ package evaluator
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -13,7 +12,8 @@ var nowTime time.Time
 
 var nowCalculated bool
 
-// fnNow returns current timestamp in ISO 8601 format.
+// reTimezoneOffset matches a bare timezone offset like +0000 or -0000 at end of string.
+var reTimezoneOffset = mustCompileRegex(`([+-])(\d{2})(\d{2})$`) // fnNow returns current timestamp in ISO 8601 format.
 // Signature: $now([picture [, timezone]])
 
 func fnNow(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
@@ -177,10 +177,8 @@ func fnToMillis(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []
 // normalizeTimezoneOffset converts timezone offsets like +0000 to +00:00
 
 func normalizeTimezoneOffset(timestamp string) string {
-	// Match timezone offset at the end: +0000 or -0000
-	re := regexp.MustCompile(`([+-])(\d{2})(\d{2})$`)
-	if re.MatchString(timestamp) {
-		return re.ReplaceAllString(timestamp, `$1$2:$3`)
+	if reTimezoneOffset.MatchString(timestamp) {
+		return reTimezoneOffset.ReplaceAllString(timestamp, `$1$2:$3`)
 	}
 	return timestamp
 }
@@ -225,8 +223,8 @@ func parseTimestampWithPicture(timestamp, picture string) (interface{}, error) {
 		}
 	}
 
-	// Compile and match
-	re, err := regexp.Compile("^" + pattern + "$")
+	// Compile and match — use regex cache to avoid re-compiling identical patterns.
+	re, err := getOrCompileRegex("^" + pattern + "$")
 	if err != nil {
 		return nil, fmt.Errorf("invalid picture format: %s", picture)
 	}

@@ -48,6 +48,64 @@ func (e *Evaluator) evalBinary(ctx context.Context, node *types.ASTNode, evalCtx
 	left = unwrapCVsDeep(left)
 	right = unwrapCVsDeep(right)
 
+	// Fast-path for the most common case: both operands are float64.
+	// Avoids the toNumber() type-assertion chain and generic switch below.
+	// Arithmetic ops include an inline overflow/NaN guard equivalent to checkArithmeticResult.
+	if lf, ok := left.(float64); ok {
+		if rf, ok := right.(float64); ok {
+			switch op {
+			case "+":
+				r := lf + rf
+				if math.IsNaN(r) || math.IsInf(r, 0) {
+					return nil, types.NewError(types.ErrNumberTooLarge, "number out of range", -1)
+				}
+				return r, nil
+			case "-":
+				r := lf - rf
+				if math.IsNaN(r) || math.IsInf(r, 0) {
+					return nil, types.NewError(types.ErrNumberTooLarge, "number out of range", -1)
+				}
+				return r, nil
+			case "*":
+				r := lf * rf
+				if math.IsNaN(r) || math.IsInf(r, 0) {
+					return nil, types.NewError(types.ErrNumberTooLarge, "number out of range", -1)
+				}
+				return r, nil
+			case "/":
+				if rf == 0 {
+					return nil, types.NewError(types.ErrNumberTooLarge, "division by zero", -1)
+				}
+				r := lf / rf
+				if math.IsNaN(r) || math.IsInf(r, 0) {
+					return nil, types.NewError(types.ErrNumberTooLarge, "number out of range", -1)
+				}
+				return r, nil
+			case "%":
+				if rf == 0 {
+					return nil, types.NewError(types.ErrNumberTooLarge, "division by zero", -1)
+				}
+				r := math.Mod(lf, rf)
+				if math.IsNaN(r) || math.IsInf(r, 0) {
+					return nil, types.NewError(types.ErrNumberTooLarge, "number out of range", -1)
+				}
+				return r, nil
+			case "=":
+				return lf == rf, nil
+			case "!=":
+				return lf != rf, nil
+			case "<":
+				return lf < rf, nil
+			case "<=":
+				return lf <= rf, nil
+			case ">":
+				return lf > rf, nil
+			case ">=":
+				return lf >= rf, nil
+			}
+		}
+	}
+
 	// Apply operator
 	switch op {
 	case "+":

@@ -151,7 +151,7 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 	}
 
 	// Otherwise treat as array filter predicate
-	result := make([]interface{}, 0)
+	result := make([]interface{}, 0, len(arr))
 	for _, item := range arr {
 		// Extract value and bindings from contextBoundValue if present
 		actualItem, inheritedBindings := extractBoundItem(item)

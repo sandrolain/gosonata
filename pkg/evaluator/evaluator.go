@@ -31,19 +31,31 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/sandrolain/gosonata/pkg/cache"
+	"github.com/sandrolain/gosonata/pkg/functions"
 	"github.com/sandrolain/gosonata/pkg/types"
 )
 
 // Evaluator evaluates JSONata expressions against data.
 type Evaluator struct {
-	opts   EvalOptions
-	logger *slog.Logger
+	opts      EvalOptions
+	logger    *slog.Logger
+	cache     *cache.Cache            // non-nil when Caching is enabled
+	customFns map[string]*FunctionDef // user-registered custom functions
 }
 
 // EvalOptions configures evaluator behavior.
 type EvalOptions struct {
-	// Caching enables expression result caching.
+	// Caching enables expression compilation caching.
+	// When true, compiled expressions are cached by query string.
+	// The default cache holds up to 256 entries with LRU eviction.
 	Caching bool
+	// CacheSize sets the maximum number of cached expressions.
+	// Only used when Caching is true and no explicit Cache is provided.
+	// Defaults to 256.
+	CacheSize int
+	// Cache is a custom expression cache. If non-nil, Caching is implicitly enabled.
+	Cache *cache.Cache
 	// Concurrency enables concurrent evaluation.
 	Concurrency bool
 	// MaxDepth limits recursion depth.
@@ -54,6 +66,8 @@ type EvalOptions struct {
 	Debug bool
 	// Logger for structured logging.
 	Logger *slog.Logger
+	// CustomFunctions holds user-defined functions to register with the evaluator.
+	CustomFunctions []functions.CustomFunctionDef
 }
 
 // New creates a new Evaluator with default options.
@@ -73,10 +87,53 @@ func New(opts ...EvalOption) *Evaluator {
 		options.Logger = slog.Default()
 	}
 
-	return &Evaluator{
-		opts:   options,
-		logger: options.Logger,
+	// Initialise expression cache when caching is enabled.
+	var c *cache.Cache
+	if options.Cache != nil {
+		c = options.Cache
+	} else if options.Caching {
+		size := options.CacheSize
+		if size <= 0 {
+			size = 256
+		}
+		c = cache.New(size)
 	}
+
+	// Build custom function lookup map.
+	customFns := make(map[string]*FunctionDef, len(options.CustomFunctions))
+	for _, cfd := range options.CustomFunctions {
+		// Capture loop variable.
+		cfd := cfd
+		customFns[cfd.Name] = &FunctionDef{
+			Name:    cfd.Name,
+			MinArgs: 0,
+			MaxArgs: -1, // unlimited; type-checking done via Signature if set
+			Impl: func(ctx context.Context, _ *Evaluator, _ *EvalContext, args []interface{}) (interface{}, error) {
+				return cfd.Fn(ctx, args...)
+			},
+		}
+	}
+
+	return &Evaluator{
+		opts:      options,
+		logger:    options.Logger,
+		cache:     c,
+		customFns: customFns,
+	}
+}
+
+// Cache returns the expression cache, or nil if caching is disabled.
+func (e *Evaluator) Cache() *cache.Cache {
+	return e.cache
+}
+
+// getCustomFunction returns a user-defined custom function by name, or (nil, false).
+func (e *Evaluator) getCustomFunction(name string) (*FunctionDef, bool) {
+	if len(e.customFns) == 0 {
+		return nil, false
+	}
+	fn, ok := e.customFns[name]
+	return fn, ok
 }
 
 // Eval evaluates an expression against data.
@@ -185,10 +242,28 @@ func (e *Evaluator) EvalWithBindings(ctx context.Context, expr *types.Expression
 // EvalOption configures evaluation behavior.
 type EvalOption func(*EvalOptions)
 
-// WithCaching enables or disables result caching.
+// WithCaching enables or disables expression compilation caching.
+// When enabled, a default LRU cache of 256 entries is created.
+// To control the cache size use WithCacheSize; to supply your own cache use WithCache.
 func WithCaching(enabled bool) EvalOption {
 	return func(opts *EvalOptions) {
 		opts.Caching = enabled
+	}
+}
+
+// WithCacheSize sets the maximum number of cached expressions.
+// Only effective when combined with WithCaching(true).
+func WithCacheSize(size int) EvalOption {
+	return func(opts *EvalOptions) {
+		opts.CacheSize = size
+	}
+}
+
+// WithCache attaches an external expression cache.
+// The evaluator will use this cache regardless of the Caching flag.
+func WithCache(c *cache.Cache) EvalOption {
+	return func(opts *EvalOptions) {
+		opts.Cache = c
 	}
 }
 
@@ -224,6 +299,26 @@ func WithLogger(logger *slog.Logger) EvalOption {
 func WithMaxDepth(depth int) EvalOption {
 	return func(opts *EvalOptions) {
 		opts.MaxDepth = depth
+	}
+}
+
+// WithCustomFunction registers a user-defined function with the evaluator.
+// name is the function name without the leading "$" (the expression must use "$name" to call it).
+// signature is an optional JSONata type-signature string (e.g. "<s:s>") — pass "" to skip.
+// fn is the implementation.
+//
+// Example:
+//
+//	gosonata.Eval(`$greet(name)`, data, gosonata.WithCustomFunction("greet", "", func(ctx context.Context, args ...interface{}) (interface{}, error) {
+//	    return "Hello, " + args[0].(string) + "!", nil
+//	}))
+func WithCustomFunction(name, signature string, fn functions.CustomFunc) EvalOption {
+	return func(opts *EvalOptions) {
+		opts.CustomFunctions = append(opts.CustomFunctions, functions.CustomFunctionDef{
+			Name:      name,
+			Signature: signature,
+			Fn:        fn,
+		})
 	}
 }
 
