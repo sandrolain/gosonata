@@ -1,7 +1,7 @@
 # GoSonata Differences and Implementation Notes
 
 **Version**: 0.1.0-dev
-**Last Updated**: February 21, 2026
+**Last Updated**: February 22, 2026
 **Reference**: JSONata 2.1.0+ (JavaScript)
 
 ## Table of Contents
@@ -402,22 +402,23 @@ expression.registerFunction('myFunc', function(arg1, arg2) {
 }, '<nn:n>');  // Signature
 ```
 
-#### GoSonata (Planned)
+#### GoSonata
 
 ```go
-// Type-safe function signature
-func myFunc(ctx context.Context, args ...interface{}) (interface{}, error) {
-    arg1 := args[0].(float64)
-    arg2 := args[1].(float64)
-    return arg1 + arg2, nil
-}
-
-// Register function
-registry := functions.DefaultRegistry()
-registry.Register("$myFunc", myFunc, "<nn:n>")
+// Type-safe function signature via WithCustomFunction
+result, err := gosonata.Eval(`$add(1, 2)`, nil,
+    gosonata.WithCustomFunction("add", "<nn:n>",
+        func(ctx context.Context, args ...interface{}) (interface{}, error) {
+            return args[0].(float64) + args[1].(float64), nil
+        }),
+)
 ```
 
-**Note**: Custom function registration planned for Phase 7.
+Multiple custom functions can be registered by chaining `WithCustomFunction` options.
+Custom functions are looked up before built-ins, so they can override any built-in
+with the same name.
+
+See [API.md — WithCustomFunction](API.md#withcustomfunction) for full documentation.
 
 ---
 
@@ -675,17 +676,17 @@ type OrderedObject struct {
 
 ### 5. Function Signature Enforcement
 
-**Status**: Planned for Phase 7
+**Status**: Partial — argument count validated; full type-pattern validation pending
 
 **Details**:
 
-- JavaScript implementation has runtime signature validation
-- GoSonata currently validates argument count only
-- Full signature validation (type patterns) pending
+- JavaScript implementation validates type signatures at runtime
+- GoSonata validates argument count only; the signature string is stored but
+  full type-pattern matching (e.g. `<a<n>:n>` = "array of numbers returns number")
+  is not yet applied to arguments
+- Custom functions accept the signature param but it is not enforced
 
-**Example Signature**: `<a<n>:n>` = "array of numbers returns number"
-
-**Roadmap**: Phase 7 will implement full signature validation.
+**Roadmap**: Full signature validation planned for a future release.
 
 ---
 
@@ -907,13 +908,16 @@ const result = expression.evaluate(data);
 **After (GoSonata)**:
 
 ```go
-import "github.com/sandrolain/gosonata"
+import (
+    "context"
+    "github.com/sandrolain/gosonata"
+)
 
 expr, err := gosonata.Compile("$.name")
 if err != nil {
     log.Fatal(err)
 }
-result, err := expr.Eval(context.Background(), data)
+result, err := gosonata.EvalWithContext(context.Background(), "$.name", data)
 ```
 
 #### With Timeout
@@ -993,13 +997,16 @@ result, err := eval.Eval(ctx, expr, data)
 
 ## Future Enhancements
 
-### Planned Features
+### Implemented (Phase 7 ✅)
 
-1. **Streaming API**: Process large JSON incrementally
-2. **Custom Functions**: Register user-defined functions
-3. **Expression Caching**: Automatic caching of compiled expressions
-4. **Plugin System**: Loadable function libraries
-5. **WASM Export**: Run in browser/edge environments
+1. **Streaming API** — `gosonata.EvalStream` / `evaluator.EvalStream` (NDJSON, context-aware)
+2. **Custom Functions** — `gosonata.WithCustomFunction` / `evaluator.WithCustomFunction`
+3. **Expression Caching** — LRU cache via `WithCaching` / `WithCacheSize`
+
+### Planned (Phase 8+)
+
+1. **Plugin System**: Loadable function libraries
+2. **WASM Export**: Run in browser / edge environments
 
 ### Backward Compatibility
 

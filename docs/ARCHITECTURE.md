@@ -1,7 +1,7 @@
 # GoSonata Architecture
 
 **Version**: 0.1.0-dev
-**Last Updated**: February 21, 2026
+**Last Updated**: February 22, 2026
 **Target**: JSONata 2.1.0+
 
 ## Table of Contents
@@ -107,25 +107,30 @@ gosonata/
 │   │   └── tokens.go        # Token definitions
 │   │
 │   ├── evaluator/           # Expression evaluation
-│   │   ├── evaluator.go     # Evaluator API
-│   │   ├── eval_impl.go     # Evaluation implementation
-│   │   ├── context.go       # Evaluation context & bindings
-│   │   └── functions.go     # Built-in function implementations
+│   │   ├── evaluator.go     # Evaluator API & options
+│   │   ├── eval_impl.go     # Evaluation dispatcher (evalNode)
+│   │   ├── context.go       # Evaluation context & variable bindings
+│   │   ├── eval_stream.go   # Streaming evaluation (NDJSON)
+│   │   ├── eval_pools.go    # Shared sync.Pool resources (regex cache, bufPool)
+│   │   ├── eval_functions.go # Function call dispatch
+│   │   ├── eval_path.go     # Path navigation
+│   │   ├── eval_objects.go  # Object construction & grouping
+│   │   ├── eval_filter.go   # Filter predicate evaluation
+│   │   ├── eval_operators.go # Binary/unary operators
+│   │   ├── eval_lambda.go   # Lambda functions & closures
+│   │   ├── fn_*.go          # Built-in function implementations (13 files)
+│   │   └── functions.go     # Built-in function registration
 │   │
-│   ├── functions/           # Function registry
-│   │   └── registry.go      # Function registration & lookup
+│   ├── functions/           # Custom function extension point
+│   │   └── registry.go      # CustomFunc and CustomFunctionDef types
 │   │
 │   ├── types/               # Core type system
 │   │   ├── ast.go           # AST node definitions
 │   │   ├── expression.go    # Compiled expression type
 │   │   └── errors.go        # Error types & codes
 │   │
-│   ├── runtime/             # Runtime utilities (future)
-│   └── cache/               # Caching system (future)
-│
-└── internal/                # Private implementation details
-    ├── ast/                 # AST manipulation utilities
-    └── runtime/             # Runtime helpers
+│   ├── runtime/             # Runtime utilities
+│   └── cache/               # LRU expression cache
 ```
 
 ### Package Responsibilities
@@ -185,15 +190,16 @@ Shared type definitions:
 
 #### `pkg/functions`
 
-Function registry and management:
-
-- **Registry**: Function registration and lookup
-- **Signatures**: Function signature definitions
+Extension point for user-supplied custom functions:
 
 **Key Types**:
 
-- `FunctionRegistry`: Function storage and retrieval
-- `BuiltinFunc`: Function signature type
+- `CustomFunc`: `func(ctx context.Context, args ...interface{}) (interface{}, error)`
+- `CustomFunctionDef`: `{Name string; Signature string; Fn CustomFunc}`
+
+Custom functions are registered via `evaluator.WithCustomFunction(name, sig, fn)` (or
+the top-level `gosonata.WithCustomFunction`) and resolved at evaluation time before
+falling back to built-in functions.
 
 ---
 
@@ -355,10 +361,16 @@ func (e *Evaluator) evalNode(ctx context.Context, node *ASTNode, evalCtx *EvalCo
 type EvalContext struct {
     data     interface{}              // Current data ($)
     parent   *EvalContext             // Parent context ($$)
-    bindings map[string]interface{}   // Variable bindings
+    bindings map[string]interface{}   // Variable bindings (nil = lazy init)
     depth    int                      // Recursion depth
 }
 ```
+
+> **Performance note**: `bindings` is initialised lazily (left `nil` until
+> `SetBinding` / `SetBindings` is called). This eliminates one map allocation
+> per EvalContext in the common case where no variable is bound in that scope
+> (e.g. every step in a simple path like `$.items.name`). This is the
+> highest-impact single optimisation in the evaluator hot path.
 
 **Performance Optimizations**:
 
@@ -369,35 +381,37 @@ type EvalContext struct {
 
 ### 5. Function Registry
 
-**Purpose**: Manage built-in function implementations
+**Purpose**: Extension point for user-supplied functions.
+
+All built-in functions are registered directly inside `pkg/evaluator` (see `functions.go`
+and the `fn_*.go` files). The `pkg/functions` package exposes the public types used to
+register **custom** functions at evaluation time.
 
 **Structure**:
 
 ```go
-type FunctionRegistry struct {
-    functions  map[string]BuiltinFunc
-    signatures map[string]string
-}
+// pkg/functions/registry.go
+type CustomFunc func(ctx context.Context, args ...interface{}) (interface{}, error)
 
-type BuiltinFunc func(ctx context.Context, args ...interface{}) (interface{}, error)
+type CustomFunctionDef struct {
+    Name      string
+    Signature string
+    Fn        CustomFunc
+}
 ```
 
-**Registration**:
+**Registration** (via EvalOption):
 
 ```go
-registry.Register("$sum", fnSum, "<a<n>:n>")
-registry.Register("$uppercase", fnUppercase, "<s:s>")
+gosonata.Eval(`$double(21)`, nil,
+    gosonata.WithCustomFunction("double", "<n:n>", func(ctx context.Context, args ...interface{}) (interface{}, error) {
+        return args[0].(float64) * 2, nil
+    }),
+)
 ```
 
-**Lookup**:
-
-```go
-fn, ok := registry.Lookup("$sum")
-if !ok {
-    return ErrUndefinedFunction
-}
-result, err := fn(ctx, args...)
-```
+**Lookup priority**: custom functions are checked **before** built-ins, so they can
+override any built-in with the same name.
 
 **Built-in Functions** (66+ implemented, 100% of JSONata 2.1.0+ spec):
 
@@ -723,19 +737,48 @@ func (e *Evaluator) evalNode(ctx context.Context, node *ASTNode, evalCtx *EvalCo
 ```go
 // Allocate slice with known capacity
 results := make([]interface{}, 0, len(items))
+
+// Object constructors: pre-size maps from expression count
+objResult := &OrderedObject{
+    Keys:   make([]string, 0, len(node.Expressions)),
+    Values: make(map[string]interface{}, len(node.Expressions)),
+}
 ```
 
-#### sync.Pool
+#### Lazy bindings in EvalContext
 
 ```go
-var bufferPool = sync.Pool{
-    New: func() interface{} {
-        return new(bytes.Buffer)
-    },
+// bindings is nil until first SetBinding call —
+// eliminates one map alloc per context in simple path steps.
+func (c *EvalContext) SetBinding(name string, value interface{}) {
+    if c.bindings == nil {
+        c.bindings = make(map[string]interface{})
+    }
+    c.bindings[name] = value
+}
+```
+
+#### bytes.Buffer pool (hot string-building paths)
+
+```go
+// eval_pools.go — shared across all regex / JSON marshal hot paths
+var bufPool = sync.Pool{
+    New: func() interface{} { return new(bytes.Buffer) },
 }
 
-buf := bufferPool.Get().(*bytes.Buffer)
-defer bufferPool.Put(buf)
+func acquireBuf() *bytes.Buffer { b := bufPool.Get().(*bytes.Buffer); b.Reset(); return b }
+func releaseBuf(b *bytes.Buffer) { ... } // returns to pool (≤ 64 KB)
+```
+
+Used in `fnReplace`, `jsonataExpandTemplate` and `OrderedObject.MarshalJSON`.
+
+#### sync.Pool (regex cache)
+
+```go
+// eval_pools.go — compiled regexes cached in a sync.Map
+var regexCache sync.Map
+func getOrCompileRegex(pattern string) (*regexp.Regexp, error)
+func mustCompileRegex(pattern string) *regexp.Regexp
 ```
 
 ### 2. Parsing Optimizations
@@ -807,12 +850,13 @@ if cached, ok := e.typeCache[node]; ok {
 
 ```go
 func BenchmarkEvaluation(b *testing.B) {
-    expr := MustCompile("$.items[price > 100]")
+    expr := gosonata.MustCompile("$.items[price > 100]")
+    ev   := evaluator.New()
     data := loadTestData()
 
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        _, _ = expr.Eval(context.Background(), data)
+        _, _ = ev.Eval(context.Background(), expr, data)
     }
 }
 ```
@@ -870,22 +914,28 @@ func (r *FunctionRegistry) Lookup(name string) (BuiltinFunc, bool) {
 }
 ```
 
-#### Expression Cache (Future)
+#### Expression Cache (`pkg/cache`)
 
 ```go
+// Thread-safe LRU cache for compiled expressions.
 type Cache struct {
-    mu      sync.RWMutex
-    items   map[string]*Expression
-    maxSize int
+    mu       sync.RWMutex
+    capacity int
+    ll       *list.List
+    items    map[string]*list.Element
 }
 
-func (c *Cache) Get(key string) (*Expression, bool) {
-    c.mu.RLock()
-    defer c.mu.RUnlock()
-    expr, ok := c.items[key]
-    return expr, ok
-}
+func New(capacity int) *Cache
+func (c *Cache) Get(key string) (*types.Expression, bool)
+func (c *Cache) Set(key string, expr *types.Expression)
+func (c *Cache) GetOrCompile(key string, compile func() (*types.Expression, error)) (*types.Expression, error)
+func (c *Cache) Len() int
+func (c *Cache) Invalidate(key string)
+func (c *Cache) Clear()
 ```
+
+Enabled via `evaluator.WithCaching(true)` or `evaluator.WithCacheSize(n)`.
+The default cache holds 256 entries with LRU eviction.
 
 ### Race Condition Prevention
 
@@ -900,32 +950,7 @@ func (c *Cache) Get(key string) (*Expression, bool) {
 
 ### Planned Features
 
-#### 1. Expression Caching
-
-```go
-type CachePolicy interface {
-    ShouldCache(query string) bool
-    EvictionPolicy() EvictionPolicy
-}
-
-func WithCache(cache *Cache, policy CachePolicy) EvalOption
-```
-
-#### 2. Custom Functions
-
-```go
-type CustomFunc func(ctx context.Context, args ...interface{}) (interface{}, error)
-
-func RegisterFunction(name string, fn CustomFunc, signature string) error
-```
-
-#### 3. Streaming Support
-
-```go
-func EvalStream(ctx context.Context, query string, r io.Reader) (interface{}, error)
-```
-
-#### 4. Plugin System
+#### 1. Plugin System
 
 ```go
 type Plugin interface {
@@ -957,12 +982,14 @@ func WithMeter(meter metric.Meter) EvalOption
 - 1273/1273 official JSONata test suite cases passing (102 groups, 100%) + 249 imported conformance tests
 - `$` / `$$` / `@` / `#` / `%` operators, transforms, object constructors, lambdas, closures, partial application, recursive descent, regex
 
-#### Phase 7 (Next)
+#### Phase 7 (✅ Complete)
 
-- Expression result caching
-- Custom function registration via `FunctionRegistry`
-- Streaming API (`EvalStream`)
-- API stabilisation toward v1.0.0
+- LRU expression cache (`pkg/cache`) with `WithCaching` / `WithCacheSize` options
+- Custom function registration via `WithCustomFunction` / `CustomFunc` / `gosonata.WithCustomFunction`
+- Streaming API: `evaluator.EvalStream` / `gosonata.EvalStream` (NDJSON, context-aware)
+- Performance optimisations: lazy `EvalContext.bindings`, `bufPool`, regex `sync.Map`, pre-allocation in object constructors
+- Fuzz tests for parser and evaluator
+- API stabilised toward v1.0.0
 
 #### Phase 8+ (Roadmap)
 

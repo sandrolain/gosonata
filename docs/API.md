@@ -1,15 +1,27 @@
 # GoSonata API Reference
 
 **Version**: 0.1.0-dev
-**Last Updated**: February 21, 2026
+**Last Updated**: February 22, 2026
 **Go Version**: 1.26.0+
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
 - [Top-Level Functions](#top-level-functions)
+  - [Compile](#compile)
+  - [MustCompile](#mustcompile)
+  - [Eval](#eval)
+  - [EvalWithContext](#evalwithcontext)
+  - [EvalStream (top-level)](#evalstream-top-level)
+  - [StreamResult (top-level)](#streamresult-top-level)
+  - [CustomFunc](#customfunc)
+  - [Version](#version)
 - [Parser Package](#parser-package)
 - [Evaluator Package](#evaluator-package)
+  - [EvalOption: WithCaching / WithCacheSize](#withcaching)
+  - [EvalOption: WithCustomFunction](#withcustomfunction)
+  - [EvalStream (Evaluator)](#evalstream-evaluator)
+  - [StreamResult](#streamresult)
 - [Types Package](#types-package)
 - [Functions Package](#functions-package)
 - [Error Handling](#error-handling)
@@ -58,6 +70,12 @@ func main() {
 ### Compile and Reuse
 
 ```go
+import (
+    "context"
+    "github.com/sandrolain/gosonata"
+    "github.com/sandrolain/gosonata/pkg/evaluator"
+)
+
 // Compile once, evaluate many times
 expr, err := gosonata.Compile("$.items[price > 100]")
 if err != nil {
@@ -211,6 +229,42 @@ Returns the current version of GoSonata.
 ```go
 fmt.Println("GoSonata version:", gosonata.Version())
 ```
+
+### CustomFunc
+
+```go
+type CustomFunc = functions.CustomFunc
+// i.e. func(ctx context.Context, args ...interface{}) (interface{}, error)
+```
+
+Type alias for user-defined functions. Re-exports `functions.CustomFunc`
+so callers need not import `pkg/functions` directly.
+
+### EvalStream (top-level)
+
+```go
+func EvalStream(ctx context.Context, query string, r io.Reader, opts ...EvalOption) (<-chan StreamResult, error)
+```
+
+Convenience wrapper: compiles `query` and calls `Evaluator.EvalStream`.
+See [EvalStream (Evaluator)](#evalstream-evaluator) for full semantics.
+
+**Example**:
+
+```go
+ch, err := gosonata.EvalStream(ctx, "$.name", os.Stdin)
+for res := range ch {
+    fmt.Println(res.Value)
+}
+```
+
+### StreamResult (top-level)
+
+```go
+type StreamResult = evaluator.StreamResult
+```
+
+Type alias re-exported for callers that only import the `gosonata` package.
 
 ---
 
@@ -454,14 +508,38 @@ Enables result caching for repeated queries.
 
 **Default**: `false`
 
-**Note**: The option is accepted but currently has no observable effect — result
-caching is not yet implemented. Accepted as API surface for a future release.
-
 **Example**:
 
 ```go
 eval := evaluator.New(evaluator.WithCaching(true))
 ```
+
+**Note**: When enabled, compiled expressions are cached in an LRU cache (default 256
+entries). Cache size can be tuned with `WithCacheSize`. The top-level `gosonata.Eval`
+also benefits when `WithCaching(true)` is passed.
+
+#### WithCacheSize
+
+```go
+func WithCacheSize(size int) EvalOption
+```
+
+Sets the maximum number of cached compiled expressions. Only meaningful when
+`WithCaching(true)` is also set (or caching is otherwise enabled).
+
+**Parameters**:
+
+- `size`: Maximum number of entries in the LRU cache
+
+**Default**: `256`
+
+**Example**:
+
+```go
+eval := evaluator.New(
+    evaluator.WithCaching(true),
+    evaluator.WithCacheSize(1024),
+)
 
 #### WithConcurrency
 
@@ -569,11 +647,91 @@ logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 eval := evaluator.New(evaluator.WithLogger(logger))
 ```
 
+#### WithCustomFunction
+
+```go
+func WithCustomFunction(name, signature string, fn CustomFunc) EvalOption
+```
+
+Registers a user-defined function that can be called from JSONata expressions as
+`$name(...)`. Custom functions are looked up **before** built-ins, so they can
+override any built-in with the same name.
+
+**Parameters**:
+
+- `name`: Function name **without** the leading `$` (e.g. `"greet"` is called as `$greet(...)`)
+- `signature`: Optional JSONata type-signature string (e.g. `"<s:s>"`, `""` to skip validation)
+- `fn`: `func(ctx context.Context, args ...interface{}) (interface{}, error)`
+
+**Default**: none
+
+**Example**:
+
+```go
+result, err := gosonata.Eval(`$greet("World")`, nil,
+    gosonata.WithCustomFunction("greet", "<s:s>",
+        func(ctx context.Context, args ...interface{}) (interface{}, error) {
+            return "Hello, " + args[0].(string) + "!", nil
+        }),
+)
+// result == "Hello, World!"
+```
+
+Multiple functions can be registered by chaining the option:
+
+```go
+eval := evaluator.New(
+    evaluator.WithCustomFunction("add", "<nn:n>", fnAdd),
+    evaluator.WithCustomFunction("mul", "<nn:n>", fnMul),
+)
+```
+
+### EvalStream (Evaluator)
+
+```go
+func (e *Evaluator) EvalStream(ctx context.Context, expr *types.Expression, r io.Reader) (<-chan StreamResult, error)
+```
+
+Reads a sequence of JSON values from `r` (NDJSON / JSON-seq) and evaluates `expr`
+against each document, sending results on the returned channel.
+
+The channel is closed when all input is consumed or the context is cancelled.
+A fatal I/O or JSON-decode error is sent as a `StreamResult` with `Err != nil`
+and the channel is then closed. Per-document evaluation errors are sent
+individually and the stream continues to the next document.
+
+**Returns**: `(<-chan StreamResult, error)` — error is non-nil only if `expr` is nil.
+
+**Example**:
+
+```go
+ch, err := eval.EvalStream(ctx, expr, os.Stdin)
+for res := range ch {
+    if res.Err != nil {
+        log.Printf("error: %v", res.Err)
+        continue
+    }
+    fmt.Println(res.Value)
+}
+```
+
+### StreamResult
+
+```go
+type StreamResult struct {
+    Value interface{} // result for one document, nil when Err is set
+    Err   error       // non-nil on per-document or fatal I/O error
+}
+```
+
+Holds the output of one NDJSON streaming evaluation step. Re-exported at the
+top level as `gosonata.StreamResult`.
+
 ### EvalContext
 
 ```go
 type EvalContext struct {
-    // ... internal fields
+    // ... internal fields (all unexported)
 }
 
 func NewContext(data interface{}) *EvalContext
@@ -583,7 +741,9 @@ func (c *EvalContext) SetBinding(name string, value interface{})
 func (c *EvalContext) GetBinding(name string) (interface{}, bool)
 ```
 
-Evaluation context manages variable bindings and data scope.
+Evaluation context manages variable bindings and data scope. `bindings` is
+initialised lazily (nil until the first `SetBinding` call), which eliminates
+one map allocation per context in simple path-step evaluation.
 
 **Example**:
 
@@ -813,72 +973,44 @@ Represents JSONata `null` (distinct from `undefined`/`nil`).
 
 ## Functions Package
 
-The `functions` package manages built-in function registration and lookup.
+The `functions` package is the public extension point for user-defined (custom)
+functions. All built-in JSONata functions are implemented directly inside
+`pkg/evaluator`.
 
-### FunctionRegistry
+### CustomFunc
 
 ```go
-type FunctionRegistry struct {
-    // ... internal fields
+type CustomFunc func(ctx context.Context, args ...interface{}) (interface{}, error)
+```
+
+Signature for user-defined functions.
+
+### CustomFunctionDef
+
+```go
+type CustomFunctionDef struct {
+    Name      string
+    Signature string  // JSONata type-signature, e.g. "<s:s>" (empty = no validation)
+    Fn        CustomFunc
 }
-
-func NewRegistry() *FunctionRegistry
-func DefaultRegistry() *FunctionRegistry
-func (r *FunctionRegistry) Register(name string, fn BuiltinFunc, signature string)
-func (r *FunctionRegistry) Lookup(name string) (BuiltinFunc, bool)
-func (r *FunctionRegistry) Signature(name string) (string, bool)
-func (r *FunctionRegistry) List() []string
 ```
 
-Manages built-in function registration and lookup.
-
-> **Note**: `DefaultRegistry()` currently returns an **empty** registry — all
-> built-in functions are registered and invoked directly inside `pkg/evaluator`.
-> This package is the extension point for **custom** functions and future
-> user-supplied function registration.
-
-```go
-import "github.com/sandrolain/gosonata/pkg/functions"
-
-registry := functions.DefaultRegistry()
-
-// Lookup a function
-fn, ok := registry.Lookup("$sum")
-if ok {
-    result, err := fn(ctx, []interface{}{1, 2, 3})
-}
-
-// List all functions
-names := registry.List()
-fmt.Println(names) // ["$sum", "$count", ...]
-```
-
-### BuiltinFunc
-
-```go
-type BuiltinFunc func(ctx context.Context, args ...interface{}) (interface{}, error)
-```
-
-Function signature for built-in functions.
+Holds the definition of a single custom function. Passed to the evaluator via
+`evaluator.WithCustomFunction(name, signature, fn)` (or the corresponding
+`gosonata.WithCustomFunction` alias).
 
 **Example**:
 
 ```go
-func myCustomSum(ctx context.Context, args ...interface{}) (interface{}, error) {
-    arr, ok := args[0].([]interface{})
-    if !ok {
-        return nil, fmt.Errorf("expected array")
-    }
+import "github.com/sandrolain/gosonata/pkg/functions"
 
-    sum := 0.0
-    for _, v := range arr {
-        sum += v.(float64)
-    }
-    return sum, nil
+def := functions.CustomFunctionDef{
+    Name:      "double",
+    Signature: "<n:n>",
+    Fn: func(ctx context.Context, args ...interface{}) (interface{}, error) {
+        return args[0].(float64) * 2, nil
+    },
 }
-
-registry.Register("$mySum", myCustomSum, "<a<n>>")
-```
 
 ---
 
@@ -1283,10 +1415,14 @@ const result = expression.evaluate(data);
 
 ```go
 // Go
-import "github.com/sandrolain/gosonata"
+import (
+    "context"
+    "github.com/sandrolain/gosonata"
+    "github.com/sandrolain/gosonata/pkg/evaluator"
+)
 
 expr, _ := gosonata.Compile("$.name")
-result, _ := expr.Eval(context.Background(), data)
+result, _ := evaluator.New().Eval(context.Background(), expr, data)
 ```
 
 ### From go-jsonata v206
@@ -1318,22 +1454,17 @@ result, _ := eval.Eval(context.Background(), expr, data)
 
 ### Stable APIs
 
-- Top-level functions (`Compile`, `Eval`, `MustCompile`)
+- Top-level functions (`Compile`, `Eval`, `EvalWithContext`, `MustCompile`, `EvalStream`)
 - Parser API (`Parse`, `Compile`)
-- Basic evaluator (`New`, `Eval`)
+- Basic evaluator (`New`, `Eval`, `EvalStream`)
 - Core types (`Expression`, `ASTNode`, `Error`)
+- Options: `WithCaching`, `WithCacheSize`, `WithTimeout`, `WithConcurrency`, `WithDebug`, `WithCustomFunction`
 
-### Experimental APIs
+### Planned Changes (Phase 8+)
 
-- Caching options (not yet implemented)
-- Advanced concurrency features
-- Custom function registration (planned)
-
-### Planned Changes
-
-- Streaming API (`EvalStream`)
 - Plugin system
-- Advanced caching controls
+- WASM export
+- OpenTelemetry integration
 
 ---
 

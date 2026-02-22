@@ -13,6 +13,8 @@ A high-performance Go implementation of [JSONata](https://jsonata.org/) 2.1.0+, 
 
 > **Status**: ✅ Conformance complete — 1273/1273 official JSONata test suite cases + 249 imported conformance tests passing (100%)
 
+<img src="gopher.png" width="320" />
+
 ## Features
 
 - ✅ **High Performance**: Hand-written recursive descent parser optimized for speed
@@ -142,6 +144,12 @@ For more examples, see the [examples/](examples/) directory.
 
 - [API Documentation](https://godoc.org/github.com/sandrolain/gosonata) - Complete GoDoc reference
 - [JSONata Documentation](https://jsonata.org/) - Official JSONata language documentation
+
+### Project documentation (in `docs/`)
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Package structure, core components, data flow, performance and concurrency model
+- [docs/API.md](docs/API.md) - Public API reference, options, usage patterns and examples
+- [docs/DIFFERENCES.md](docs/DIFFERENCES.md) - Implementation differences vs JS reference, known limitations and workarounds
 
 ## Testing
 
