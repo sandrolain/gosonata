@@ -31,6 +31,10 @@ type Lambda struct {
 
 // OrderedObject preserves insertion order for JSON stringification.
 
+// THREAD-SAFETY AUDIT: safe.
+//   - builtinFunctionsOnce guarantees the map is populated exactly once.
+//   - After initBuiltinFunctions returns, the map and every *FunctionDef it
+//     contains are never mutated; all accesses are read-only.
 var (
 	builtinFunctions     map[string]*FunctionDef
 	builtinFunctionsOnce sync.Once

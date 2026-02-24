@@ -9,6 +9,14 @@ import (
 // regexCache is a process-wide cache of compiled *regexp.Regexp, keyed by pattern string.
 // Patterns are compiled once per process and the compiled form is reused across all
 // goroutines. sync.Map is ideal here: write-once (first compilation) / read-many.
+//
+// THREAD-SAFETY AUDIT: safe.
+//   - sync.Map handles concurrent reads and writes without external locking.
+//   - *regexp.Regexp is immutable after compilation; concurrent use is safe per the
+//     regexp package documentation.
+//   - In the rare case where two goroutines compile the same pattern concurrently,
+//     both Store the same deterministic value — the later write is harmless.
+//   - No entry is ever deleted or mutated after insertion.
 var regexCache sync.Map // map[string]*regexp.Regexp
 
 // getOrCompileRegex retrieves or compiles a regex pattern.
@@ -40,6 +48,13 @@ func mustCompileRegex(pattern string) *regexp.Regexp {
 // bufPool is a process-wide pool of *bytes.Buffer used in hot string-building
 // paths (JSON marshaling, regex replacement, template expansion) to reduce GC
 // pressure from short-lived buffer allocations.
+//
+// THREAD-SAFETY AUDIT: safe.
+//   - sync.Pool is designed for concurrent use; Get/Put are internally locked.
+//   - Each caller receives exclusive ownership of a buffer for the duration of its
+//     use; the buffer is never shared between goroutines.
+//   - Buffers are always Reset via acquireBuf() before use, so no residual state
+//     from a previous owner is visible.
 var bufPool = sync.Pool{
 	New: func() interface{} { return new(bytes.Buffer) },
 }

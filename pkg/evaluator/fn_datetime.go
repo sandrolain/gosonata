@@ -8,40 +8,31 @@ import (
 	"time"
 )
 
-var nowTime time.Time
-
-var nowCalculated bool
-
 // reTimezoneOffset matches a bare timezone offset like +0000 or -0000 at end of string.
 var reTimezoneOffset = mustCompileRegex(`([+-])(\d{2})(\d{2})$`) // fnNow returns current timestamp in ISO 8601 format.
 // Signature: $now([picture [, timezone]])
 
 func fnNow(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
-	// Cache the current time for all evaluations in this context
-	if !nowCalculated {
-		nowTime = time.Now()
-		nowCalculated = true
-	}
+	// Use the per-evaluation timestamp stored in the root EvalContext.
+	// This is consistent within a single expression evaluation and fresh
+	// across distinct evaluations (no global mutable state).
+	now := evalCtx.NowTime()
 
 	// Simple ISO 8601 format if no picture provided
 	if len(args) == 0 {
-		return nowTime.UTC().Format(time.RFC3339Nano), nil
+		return now.UTC().Format(time.RFC3339Nano), nil
 	}
 
 	// Note: Full XPath datetime formatting is complex and not implemented
 	// Return simple ISO format for now
-	return nowTime.UTC().Format(time.RFC3339Nano), nil
+	return now.UTC().Format(time.RFC3339Nano), nil
 }
 
 // fnMillis returns milliseconds since Unix epoch.
 
 func fnMillis(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
-	// Use same time as $now for consistency
-	if !nowCalculated {
-		nowTime = time.Now()
-		nowCalculated = true
-	}
-	return float64(nowTime.UnixMilli()), nil
+	// Use same per-evaluation timestamp as $now for consistency.
+	return float64(evalCtx.NowTime().UnixMilli()), nil
 }
 
 // fnFromMillis converts milliseconds since epoch to ISO 8601 string.

@@ -70,11 +70,17 @@ type EvalOptions struct {
 	CustomFunctions []functions.CustomFunctionDef
 }
 
+// defaultConcurrency controls the default value of EvalOptions.Concurrency for
+// newly created Evaluators. It is true on all platforms except WebAssembly
+// targets (js/wasm, wasip1), where it is set to false by init() in
+// evaluator_wasm.go to avoid deadlocks in the single-threaded JS event loop.
+var defaultConcurrency = true
+
 // New creates a new Evaluator with default options.
 func New(opts ...EvalOption) *Evaluator {
 	options := EvalOptions{
-		Caching:     false, // Disabled by default
-		Concurrency: true,  // Enabled by default
+		Caching:     false,              // Disabled by default
+		Concurrency: defaultConcurrency, // false on WASM targets
 		MaxDepth:    10000,
 		Timeout:     30 * time.Second,
 	}

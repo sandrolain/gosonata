@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"fmt"
+	"time"
 )
 
 // EvalContext maintains evaluation state including variable bindings and current data.
@@ -24,6 +25,14 @@ type EvalContext struct {
 	// isArrayItem marks this context as created during array iteration in a path.
 	// Only contexts created this way are valid targets for the % (parent) operator.
 	isArrayItem bool
+
+	// nowTime caches the current time for the duration of a single evaluation.
+	// It is stored only on the root context and lazily initialised on first use.
+	// This makes $now() / $millis() consistent within one expression while
+	// returning a fresh timestamp for every new evaluation — regardless of
+	// whether the evaluator runs as a short-lived process, a long-running
+	// server, or a reused WASM module instance.
+	nowTime *time.Time
 }
 
 // NewContext creates a new evaluation context.
@@ -149,6 +158,19 @@ func (c *EvalContext) CloneDeeper() *EvalContext {
 	cloned := c.Clone()
 	cloned.depth++
 	return cloned
+}
+
+// NowTime returns the wall-clock time for the current evaluation.
+// The value is captured once on first call and reused for all subsequent calls
+// within the same evaluation tree, ensuring that $now() and $millis() return
+// a consistent timestamp throughout a single expression evaluation.
+func (c *EvalContext) NowTime() time.Time {
+	root := c.root
+	if root.nowTime == nil {
+		t := time.Now()
+		root.nowTime = &t
+	}
+	return *root.nowTime
 }
 
 // String returns a string representation of the context.
