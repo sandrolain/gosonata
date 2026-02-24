@@ -15,6 +15,7 @@ tasks:
     desc: Install all required Go tools on macOS
     cmds:
       - brew install trivy
+      - brew install wasmtime
       - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
       - go install golang.org/x/vuln/cmd/govulncheck@latest
       - go install github.com/google/go-licenses/v2@latest
@@ -38,6 +39,52 @@ tasks:
     cmds:
       - go mod download
       - go mod tidy
+
+  # ── WASM build tasks ───────────────────────────────────────────────────────
+
+  wasm:build:js:
+    desc: Build GoSonata WASM for browser / Node.js (GOOS=js GOARCH=wasm)
+    cmds:
+      - GOOS=js GOARCH=wasm go build -o cmd/wasm/js/gosonata.wasm ./cmd/wasm/js/
+      - 'echo "✅ Built: cmd/wasm/js/gosonata.wasm ($(du -sh cmd/wasm/js/gosonata.wasm | cut -f1))"'
+
+  wasm:build:wasi:
+    desc: Build GoSonata WASM for WASI runtimes (GOOS=wasip1 GOARCH=wasm)
+    cmds:
+      - GOOS=wasip1 GOARCH=wasm go build -o cmd/wasm/wasi/gosonata.wasm ./cmd/wasm/wasi/
+      - 'echo "✅ Built: cmd/wasm/wasi/gosonata.wasm ($(du -sh cmd/wasm/wasi/gosonata.wasm | cut -f1))"'
+
+  wasm:build:
+    desc: Build all WASM targets (js/wasm + wasip1)
+    cmds:
+      - task: wasm:build:js
+      - task: wasm:build:wasi
+
+  wasm:copy-support:js:
+    desc: Copy wasm_exec.js from GOROOT to all directories that need it
+    cmds:
+      - |
+        WASM_EXEC="$(go env GOROOT)/lib/wasm/wasm_exec.js"
+        for dir in cmd/wasm/js examples/wasm/browser examples/wasm/node; do
+          cp "$WASM_EXEC" "$dir/"
+          echo "✅ Copied wasm_exec.js → $dir/"
+        done
+
+  wasm:clean:
+    desc: Remove all built WASM binaries and copied support files
+    cmds:
+      - rm -f cmd/wasm/js/gosonata.wasm cmd/wasm/js/wasm_exec.js
+      - rm -f cmd/wasm/wasi/gosonata.wasm
+      - rm -f examples/wasm/browser/wasm_exec.js
+      - rm -f examples/wasm/node/wasm_exec.js
+      - echo "✅ Cleaned WASM artifacts"
+
+  wasm:test:node:
+    desc: Quick smoke-test the js/wasm binary with Node.js
+    cmds:
+      - task: wasm:build:js
+      - task: wasm:copy-support:js
+      - node examples/wasm/node/example.js
 
   # Testing tasks
   test:
@@ -70,6 +117,16 @@ tasks:
     desc: Verify GoSonata and JSONata JS produce identical results for all benchmark queries
     cmds:
       - go test -run TestResultCorrectness -v -count=1 ./tests/comparison/...
+
+  test:comparison:wasm:
+    desc: Run three-way GoSonata/JS/WASM comparison (requires wasm:build:js first)
+    cmds:
+      - go test -run "TestTripleComparison|TestWASMCorrectness" -v -count=1 ./tests/comparison/...
+
+  bench:comparison:wasm:
+    desc: Print WASM comparison report (requires wasm:build:js first)
+    cmds:
+      - go test -run TestTripleComparison -v -count=1 ./tests/comparison/...
 
   test:watch:
     desc: Run tests on file changes
@@ -212,6 +269,7 @@ tasks:
       - rm -f {{.COVERAGE_FILE}} coverage.html
       - rm -f benchmark.txt
       - rm -f gosec-report.json
+      - task: wasm:clean
       - go clean -cache -testcache -modcache
       - echo "Cleaned build artifacts"
 

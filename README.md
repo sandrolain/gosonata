@@ -24,6 +24,7 @@ A high-performance Go implementation of [JSONata](https://jsonata.org/) 2.1.0+, 
 - ✅ **Type Safe**: Strongly typed with comprehensive error handling
 - ✅ **Well Tested**: 1273/1273 official JSONata test suite cases passing (102 groups, 100%), plus 249 additional imported conformance tests
 - ✅ **Production Ready**: DoS protection, resource limits, structured logging
+- ✅ **WebAssembly**: Browser, Node.js (js/wasm) and WASI runtime support
 
 ## What is JSONata?
 
@@ -150,6 +151,7 @@ For more examples, see the [examples/](examples/) directory.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Package structure, core components, data flow, performance and concurrency model
 - [docs/API.md](docs/API.md) - Public API reference, options, usage patterns and examples
 - [docs/DIFFERENCES.md](docs/DIFFERENCES.md) - Implementation differences vs JS reference, known limitations and workarounds
+- [docs/WASM.md](docs/WASM.md) - WebAssembly integration: browser, Node.js, WASI
 
 ## Testing
 
@@ -238,6 +240,80 @@ Each scenario is verified to produce identical results in both engines (`TestRes
 > JSONata JS timings measured within a single persistent Node.js process (no startup cost).
 > JS `evaluate()` is inherently async (Promise); Go is synchronous — the async overhead
 > is included since it is unavoidable in real JS usage.
+
+## WebAssembly
+
+GoSonata can be compiled to WebAssembly for use in browsers, Node.js, and WASI runtimes.
+
+### Build
+
+```bash
+# Build browser / Node.js target (GOOS=js GOARCH=wasm)
+task wasm:build:js
+
+# Build WASI runtime target (GOOS=wasip1 GOARCH=wasm)
+task wasm:build:wasi
+
+# Copy wasm_exec.js support file
+task wasm:copy-support:js
+```
+
+### Use in Node.js
+
+```javascript
+require('./wasm_exec.js');
+const fs = require('fs');
+const go = new Go();
+const { instance } = await WebAssembly.instantiate(
+  fs.readFileSync('./gosonata.wasm'), go.importObject
+);
+go.run(instance);
+const result = JSON.parse(globalThis.gosonata.eval(
+  '$.users[age > 25].name',
+  JSON.stringify({ users: [...] })
+));
+```
+
+### Use in Browser
+
+```html
+<script src="wasm_exec.js"></script>
+<script>
+  const go = new Go();
+  WebAssembly.instantiateStreaming(fetch('gosonata.wasm'), go.importObject)
+    .then(({ instance }) => {
+      go.run(instance);
+      const result = JSON.parse(
+        globalThis.gosonata.eval('$.name', JSON.stringify({ name: 'Alice' }))
+      );
+    });
+</script>
+```
+
+### Use via WASI (stdin/stdout JSON protocol)
+
+```bash
+echo '{"query":"$.name","data":{"name":"Alice"}}' | wasmtime cmd/wasm/wasi/gosonata.wasm
+# → {"result":"Alice"}
+```
+
+See [docs/WASM.md](docs/WASM.md) and [examples/wasm/](examples/wasm/) for full documentation.
+
+### WASM performance
+
+GoSonata WASM runs via the Go runtime embedded in the binary. Measured on Apple M2, Go 1.26, Node.js v24:
+
+| Scenario | Go ns/op | JS ns/op | WASM ns/op |
+|--|--:|--:|--:|
+| SimplePath | 736 | 945 | 19,695 |
+| Filter / 10 users | 2,599 | 10,861 | 72,124 |
+| Filter / 100 users | 18,836 | 121,162 | 531,210 |
+| Aggregation / 100 users | 5,226 | 19,861 | 445,592 |
+| Sort / 10 users | 6,974 | 44,368 | 147,293 |
+
+Native Go is ~18–85× faster than WASM. Use WASM for browser/non-Go environments; prefer native Go for backend services.
+
+---
 
 ## Security
 

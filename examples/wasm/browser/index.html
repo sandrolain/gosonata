@@ -1,0 +1,149 @@
+<!doctype html>
+<!--
+  GoSonata WASM — Browser example
+  ================================
+  Prerequisites (run from project root):
+    task wasm:build:js            # builds gosonata.wasm
+    task wasm:copy-support:js     # copies wasm_exec.js + gosonata_wasm.js here
+    npx serve examples/wasm/browser   # or any static HTTP server
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GoSonata WASM — Browser Demo</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 860px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      h1 {
+        color: #1a73e8;
+      }
+      .card {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 1.2rem;
+        margin: 1rem 0;
+      }
+      label {
+        font-weight: 600;
+        display: block;
+        margin-bottom: 0.4rem;
+      }
+      textarea,
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        font-family: monospace;
+        font-size: 0.9rem;
+        padding: 0.5rem;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      textarea {
+        height: 140px;
+        resize: vertical;
+      }
+      button {
+        margin-top: 0.8rem;
+        padding: 0.5rem 1.4rem;
+        background: #1a73e8;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 1rem;
+      }
+      button:disabled {
+        background: #aaa;
+      }
+      pre {
+        background: #1e1e1e;
+        color: #d4d4d4;
+        padding: 1rem;
+        border-radius: 6px;
+        overflow-x: auto;
+        white-space: pre-wrap;
+      }
+      #status {
+        font-style: italic;
+        color: #555;
+      }
+      .error {
+        color: #c0392b;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>GoSonata WASM — Browser Demo</h1>
+    <p id="status">Loading GoSonata WASM module…</p>
+
+    <div class="card">
+      <label for="query">JSONata Query</label>
+      <input
+        id="query"
+        type="text"
+        value='$.users[active = true].{ "name": name, "dept": department }'
+      />
+    </div>
+
+    <div class="card">
+      <label for="data">Input Data (JSON)</label>
+      <textarea id="data">
+{
+  "users": [
+    {"name": "Alice", "department": "Engineering", "active": true,  "salary": 95000},
+    {"name": "Bob",   "department": "Sales",       "active": false, "salary": 72000},
+    {"name": "Carol", "department": "Engineering", "active": true,  "salary": 110000}
+  ]
+}</textarea
+      >
+    </div>
+
+    <button id="runBtn" disabled>Evaluate</button>
+
+    <div class="card">
+      <label>Result</label>
+      <pre id="result">—</pre>
+    </div>
+
+    <!-- wasm_exec.js must be loaded before gosonata_wasm.js -->
+    <script src="wasm_exec.js"></script>
+    <script src="gosonata_wasm.js"></script>
+    <script>
+      async function init() {
+        const statusEl = document.getElementById("status");
+        const runBtn = document.getElementById("runBtn");
+        const resultEl = document.getElementById("result");
+
+        try {
+          // gosonata_wasm.js exposes window.GoSonataWasm.load()
+          const gs = await window.GoSonataWasm.load("gosonata.wasm");
+          statusEl.textContent = `✅ GoSonata ${gs.version()} ready`;
+          runBtn.disabled = false;
+
+          runBtn.addEventListener("click", () => {
+            resultEl.className = "";
+            try {
+              const query = document.getElementById("query").value.trim();
+              const data = document.getElementById("data").value.trim();
+              const raw = gs.eval(query, data); // data already JSON
+              const pretty = JSON.stringify(JSON.parse(raw), null, 2);
+              resultEl.textContent = pretty;
+            } catch (err) {
+              resultEl.className = "error";
+              resultEl.textContent = "⚠ " + err.message;
+            }
+          });
+        } catch (err) {
+          statusEl.className = "error";
+          statusEl.textContent = "⚠ Failed to load WASM: " + err.message;
+        }
+      }
+      init();
+    </script>
+  </body>
+</html>
