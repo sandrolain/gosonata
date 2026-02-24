@@ -29,8 +29,13 @@ GoSonata can be compiled to [WebAssembly](https://webassembly.org/) for use in b
     - [wasmtime](#wasmtime)
     - [From Go or any language](#from-go-or-any-language)
   - [Performance notes](#performance-notes)
-    - [Measured three-way comparison (Apple M2, Go 1.26, Node.js v24)](#measured-three-way-comparison-apple-m2-go-126-nodejs-v24)
+    - [Measured four-way comparison (Apple M2, Go 1.26, Node.js v24)](#measured-four-way-comparison-apple-m2-go-126-nodejs-v24)
     - [Reproduce the benchmark](#reproduce-the-benchmark)
+  - [wazero in-process runtime](#wazero-in-process-runtime)
+    - [When to use wazero](#when-to-use-wazero)
+    - [How it works](#how-it-works)
+    - [Performance characteristics](#performance-characteristics)
+    - [Build the wasip1 binary](#build-the-wasip1-binary)
   - [Comparison tests](#comparison-tests)
   - [Troubleshooting](#troubleshooting)
     - [`wasm_exec.js not found`](#wasm_execjs-not-found)
@@ -288,56 +293,155 @@ For production Go services always prefer the native Go API. WASM is the right ch
 - you are integrating GoSonata into a non-Go environment,
 - or you need a portable, sandboxed CLI via WASI.
 
-### Measured three-way comparison (Apple M2, Go 1.26, Node.js v24)
+### Measured four-way comparison (Apple M2, Go 1.26, Node.js v24)
 
-Eval-only timings (expression pre-compiled). All three engines produce identical results (`TestWASMCorrectness`).
+Eval-only timings (expression pre-compiled). Native Go, JS and WASM(Node) produce identical results (`TestWASMCorrectness`). Wazero matches native Go (`TestWazeroCorrectness`).
 
-| Scenario | Go ns/op | JS ns/op | WASM ns/op | Go vs JS | Go vs WASM | JS vs WASM |
-|--|--:|--:|--:|--:|--:|--:|
-| SimplePath / 1 user | 736 | 945 | 19,695 | **1.3×** | **26.8×** | 20.9× |
-| Filter / 10 users | 2,599 | 10,861 | 72,124 | **4.2×** | **27.8×** | 6.6× |
-| Filter / 100 users | 18,836 | 121,162 | 531,210 | **6.4×** | **28.2×** | 4.4× |
-| Aggregation / 10 users | 1,328 | 3,622 | 63,835 | **2.7×** | **48.1×** | 17.6× |
-| Aggregation / 100 users | 5,226 | 19,861 | 445,592 | **3.8×** | **85.3×** | 22.4× |
-| Transform / 10 users | 2,997 | 9,912 | 81,005 | **3.3×** | **27.0×** | 8.2× |
-| Transform / 100 users | 15,444 | 48,063 | 520,219 | **3.1×** | **33.7×** | 10.8× |
-| Sort / 10 users | 6,974 | 44,368 | 147,293 | **6.4×** | **21.1×** | 3.3× |
-| Arithmetic | 1,000 | 2,700 | 18,379 | **2.7×** | **18.4×** | 6.8× |
+The wazero runtime and AOT module compilation happen **once** in `TestMain` before any test runs (see [Comparison tests](#comparison-tests)). The ns/op figures below reflect only the per-eval `InstantiateModule` cost.
 
-> `Go vs JS` = JS ns/op ÷ Go ns/op. `Go vs WASM` = WASM ns/op ÷ Go ns/op. `JS vs WASM` = WASM ns/op ÷ JS ns/op. Higher = left engine is faster.
+| Scenario | Go ns/op | JS ns/op | WASM(Node) ns/op | Wazero ns/op | Go vs JS | Go vs WASM | Go vs Wazero |
+|--|--:|--:|--:|--:|--:|--:|--:|
+| SimplePath / 1 user | 446 | 887 | 19,142 | 1,983,476 | **2.0×** | **42.9×** | 4,448× |
+| Filter / 10 users | 2,587 | 11,162 | 75,568 | 2,117,868 | **4.3×** | **29.2×** | 819× |
+| Filter / 100 users | 18,798 | 100,606 | 530,894 | 2,994,175 | **5.4×** | **28.2×** | 159× |
+| Aggregation / 10 users | 1,175 | 3,564 | 64,519 | 2,100,250 | **3.0×** | **54.9×** | 1,787× |
+| Aggregation / 100 users | 5,345 | 19,591 | 453,608 | 2,861,945 | **3.7×** | **84.9×** | 535× |
+| Transform / 10 users | 3,075 | 10,145 | 81,720 | 2,197,427 | **3.3×** | **26.6×** | 715× |
+| Transform / 100 users | 16,945 | 49,011 | 538,535 | 3,099,788 | **2.9×** | **31.8×** | 183× |
+| Sort / 10 users | 6,919 | 44,309 | 147,682 | 2,328,037 | **6.4×** | **21.3×** | 336× |
+| Arithmetic | 1,139 | 2,809 | 19,219 | 1,980,541 | **2.5×** | **16.9×** | 1,739× |
 
-**Summary**: GoSonata native Go is ~2–85× faster than WASM, and JSONata JS is ~3–22× faster than WASM. Use WASM only when a native Go process is not an option.
+> Higher multiplier = left engine is faster. Wazero ns/op is the per-call `InstantiateModule` cost (~2 ms), dominated by the Go WASM runtime's own startup (single-shot protocol). The one-time AOT compile is ~1.7 s and runs in `TestMain`.
+
+**Summary**: GoSonata native Go is 17–85× faster than WASM(Node), and WASM(Node) via Node.js is 5–104× faster than Wazero in the single-shot benchmark. See the [wazero section](#wazero-in-process-runtime) for details and when to use each approach.
 
 ### Reproduce the benchmark
 
 ```bash
 task wasm:build:js
+task wasm:build:wasi
 task wasm:copy-support:js
-go test -run TestTripleComparison -v -count=1 ./tests/comparison/...
+go test -run TestTripleComparison -v -count=1 ./tests/comparison/...  # 3-way
+go test -run TestQuadComparison   -v -count=1 ./tests/comparison/...  # 4-way
+```
+
+---
+
+## wazero in-process runtime
+
+[wazero](https://github.com/tetratelabs/wazero) is a pure-Go WebAssembly runtime (no CGO, no external dependencies) that can execute the GoSonata `wasip1` binary completely in-process — **no Node.js subprocess required**.
+
+### When to use wazero
+
+| Scenario | Recommended |
+|--|--|
+| Production Go service evaluating thousands of expressions | Native Go API |
+| Browser / non-Go environment | js/wasm via Node.js or bundler |
+| Occasional evaluation in Go without importing gosonata | **wazero + wasip1 binary** |
+| Sandboxed, untrusted expression evaluation | **wazero + wasip1 binary** |
+| Build constraints prevent importing gosonata directly | **wazero + wasip1 binary** |
+
+### How it works
+
+The `wasip1` binary reads `{"query":"…","data":…}` from stdin and writes `{"result":…}` or `{"error":"…"}` to stdout. wazero pipes these in-process:
+
+```go
+import (
+    "bytes"
+    "context"
+    "encoding/json"
+
+    "github.com/tetratelabs/wazero"
+    "github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+    wazeroSys "github.com/tetratelabs/wazero/sys"
+)
+
+// Compile once, re-instantiate per eval.
+ctx := context.Background()
+r := wazero.NewRuntime(ctx)
+defer r.Close(ctx)
+
+wasi_snapshot_preview1.Instantiate(ctx, r)
+wasmBytes, _ := os.ReadFile("gosonata.wasm") // wasip1 binary
+compiled, _ := r.CompileModule(ctx, wasmBytes)
+
+// Per evaluation:
+payload, _ := json.Marshal(map[string]any{"query": "$.name", "data": data})
+
+var stdout bytes.Buffer
+modConfig := wazero.NewModuleConfig().
+    WithStdin(bytes.NewReader(payload)).
+    WithStdout(&stdout).
+    WithArgs("gosonata").
+    WithName("") // anonymous — required for multiple instantiations
+
+_, err := r.InstantiateModule(ctx, compiled, modConfig)
+if err != nil {
+    var exitErr *wazeroSys.ExitError
+    if !errors.As(err, &exitErr) || exitErr.ExitCode() != 0 {
+        log.Fatal(err)
+    }
+    // exit code 0 is normal for wasip1 programs
+}
+
+var result struct {
+    Result json.RawMessage `json:"result"`
+    Error  string          `json:"error"`
+}
+json.Unmarshal(stdout.Bytes(), &result)
+```
+
+### Performance characteristics
+
+Each `InstantiateModule` call starts the Go WASM runtime from scratch. This costs ~2 ms on Apple M2, regardless of expression complexity. This overhead dominates for simple expressions but becomes proportionally smaller for large datasets.
+
+The one-time `r.CompileModule` (AOT compilation) costs ~1.7 s. In the comparison test suite this is done in `TestMain` **before** any test function runs, so it does not distort individual test timings.
+
+**Optimising wazero throughput:**
+
+- **Amortise startup**: call `r.CompileModule` once at program startup, then reuse the `CompiledModule` for every eval.
+- **Batch queries**: modify the `wasip1` binary to accept a JSON array of `{query, data}` entries per invocation — one module instantiation for many queries.
+- **Parallelism**: instantiate multiple modules concurrently from separate goroutines, each with its own `bytes.Buffer` for stdin/stdout.
+
+### Build the wasip1 binary
+
+```bash
+task wasm:build:wasi
+# → cmd/wasm/wasi/gosonata.wasm (5.4 MB)
 ```
 
 ---
 
 ## Comparison tests
 
-The `tests/comparison/wasm_comparison_test.go` file provides two test functions:
+The `tests/comparison/wasm_comparison_test.go` file provides four test functions:
 
 | Test | What it checks |
 |--|--|
-| `TestWASMCorrectness` | Go native = JSONata JS = GoSonata WASM (identical JSON output for 8 queries) |
-| `TestTripleComparison` | Prints a performance table with Go, JS and WASM columns |
+| `TestWASMCorrectness` | Go native = JSONata JS = GoSonata WASM(Node) (identical JSON output for 8 queries) |
+| `TestWazeroCorrectness` | Go native = GoSonata WASM(wazero) (identical JSON output for 8 queries) |
+| `TestTripleComparison` | Performance table: Go, JS, WASM(Node) (3 columns) |
+| `TestQuadComparison` | Performance table: Go, JS, WASM(Node), Wazero (4 columns) |
 
-Both tests skip automatically when `cmd/wasm/js/gosonata.wasm` is not present.
+`TestWASMCorrectness` and `TestTripleComparison` skip when `cmd/wasm/js/gosonata.wasm` is absent.
+`TestWazeroCorrectness` and `TestQuadComparison` skip when `cmd/wasm/wasi/gosonata.wasm` is absent.
+
+**`TestMain`**: a package-level `TestMain` runs before every test function. If the `wasip1` binary is present it initialises the wazero `Runtime` and AOT-compiles the module (~1.7 s); the runtime stays open for the entire test run and is closed cleanly on exit. Individual test functions therefore pay only the per-eval `InstantiateModule` cost, not the compile cost.
 
 ```bash
-# All WASM comparison tests
+# Build required binaries
+task wasm:build:js
+task wasm:build:wasi
+task wasm:copy-support:js
+
+# Run all WASM comparison tests
 task test:comparison:wasm
 
-# Correctness only
-go test -run TestWASMCorrectness -v -count=1 ./tests/comparison/...
-
-# Performance table only
-go test -run TestTripleComparison -v -count=1 ./tests/comparison/...
+# Individual tests
+go test -run TestWASMCorrectness    -v -count=1 ./tests/comparison/...
+go test -run TestWazeroCorrectness  -v -count=1 ./tests/comparison/...
+go test -run TestTripleComparison   -v -count=1 ./tests/comparison/...
+go test -run TestQuadComparison     -v -count=1 ./tests/comparison/...
 ```
 
 ---
