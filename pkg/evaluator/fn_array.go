@@ -2,8 +2,13 @@ package evaluator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
+	"sort"
+	"strings"
+
+	"github.com/sandrolain/gosonata/pkg/types"
 )
 
 func fnAppend(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
@@ -60,15 +65,11 @@ func fnDistinct(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []
 		return nil, err
 	}
 
-	// Use a map to track seen values
-	// Note: This uses string representation for comparison, which may not be perfect
-	// for complex objects but works for primitive types
 	seen := make(map[string]bool)
 	result := make([]interface{}, 0)
 
 	for _, item := range arr {
-		// Serialize item to string for comparison
-		key := fmt.Sprintf("%v", item)
+		key := distinctCanonicalKey(item)
 		if !seen[key] {
 			seen[key] = true
 			result = append(result, item)
@@ -79,6 +80,79 @@ func fnDistinct(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []
 		return nil, nil
 	}
 	return result, nil
+}
+
+// distinctCanonicalKey produces a canonical string representation of a JSON value
+// suitable for equality comparison in $distinct. Object keys are sorted to ensure
+// that two objects with the same content but different insertion order compare equal.
+func distinctCanonicalKey(v interface{}) string {
+	switch val := v.(type) {
+	case nil:
+		return "N" // undefined/nil
+	case types.Null:
+		return "n" // JSON null
+	case bool:
+		if val {
+			return "bt"
+		}
+		return "bf"
+	case float64:
+		b, _ := json.Marshal(val)
+		return "f" + string(b)
+	case string:
+		b, _ := json.Marshal(val)
+		return "s" + string(b)
+	case *OrderedObject:
+		// Sort keys for canonical comparison
+		keys := make([]string, len(val.Keys))
+		copy(keys, val.Keys)
+		sort.Strings(keys)
+		var buf strings.Builder
+		buf.WriteString("o{")
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			kb, _ := json.Marshal(k)
+			buf.Write(kb)
+			buf.WriteByte(':')
+			buf.WriteString(distinctCanonicalKey(val.Values[k]))
+		}
+		buf.WriteByte('}')
+		return buf.String()
+	case map[string]interface{}:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var buf strings.Builder
+		buf.WriteString("o{")
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			kb, _ := json.Marshal(k)
+			buf.Write(kb)
+			buf.WriteByte(':')
+			buf.WriteString(distinctCanonicalKey(val[k]))
+		}
+		buf.WriteByte('}')
+		return buf.String()
+	case []interface{}:
+		var buf strings.Builder
+		buf.WriteString("a[")
+		for i, item := range val {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			buf.WriteString(distinctCanonicalKey(item))
+		}
+		buf.WriteByte(']')
+		return buf.String()
+	default:
+		return fmt.Sprintf("%T:%v", val, val)
+	}
 }
 
 // fnShuffle randomly shuffles an array.

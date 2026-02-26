@@ -142,8 +142,6 @@ func (e *Evaluator) evalVariable(node *types.ASTNode, evalCtx *EvalContext) (int
 	}
 
 	return value, nil
-
-	return value, nil
 }
 
 // evalPath evaluates a path expression (field navigation).

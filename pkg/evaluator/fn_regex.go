@@ -126,7 +126,7 @@ func fnMatch(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []int
 		return []interface{}{}, nil
 	}
 
-	result := make([]interface{}, len(matches))
+	matchObjects := make([]*OrderedObject, len(matches))
 	for i, match := range matches {
 		// match[0:2] is the full match start:end
 		// match[2:] are capture groups
@@ -144,15 +144,42 @@ func fnMatch(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []int
 			}
 		}
 
-		matchObj := &OrderedObject{
-			Keys: []string{"match", "index", "groups"},
+		matchObjects[i] = &OrderedObject{
+			Keys: []string{"match", "index", "groups", "next"},
 			Values: map[string]interface{}{
 				"match":  matchStr,
 				"index":  float64(match[0]),
 				"groups": groups,
+				"next":   nil, // populated below
 			},
 		}
-		result[i] = matchObj
+	}
+
+	// Wire next() functions: each match object's next() returns the following match.
+	// The last match's next() returns undefined (nil).
+	for i := range matchObjects {
+		var nextTarget *OrderedObject
+		if i+1 < len(matchObjects) {
+			nextTarget = matchObjects[i+1]
+		}
+		// Capture nextTarget by value for the closure.
+		captured := nextTarget
+		matchObjects[i].Values["next"] = &FunctionDef{
+			Name:    "next",
+			MinArgs: 0,
+			MaxArgs: 0,
+			Impl: func(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []interface{}) (interface{}, error) {
+				if captured == nil {
+					return nil, nil
+				}
+				return captured, nil
+			},
+		}
+	}
+
+	result := make([]interface{}, len(matchObjects))
+	for i, mo := range matchObjects {
+		result[i] = mo
 	}
 
 	return result, nil

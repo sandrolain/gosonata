@@ -651,3 +651,149 @@ func TestComplexLambda(t *testing.T) {
 		}
 	}
 }
+
+// --- $distinct deep-equality tests ---
+
+// TestFnDistinctDeepEquality verifies that $distinct uses structural deep equality,
+// not string representation. This was the bug fixed on 2026-02-26.
+func TestFnDistinctDeepEquality(t *testing.T) {
+	t.Run("primitives regression", func(t *testing.T) {
+		// Basic deduplication of primitives must still work.
+		result := eval(t, `$distinct([1, 2, 1, 3, 2])`, nil)
+		arr, ok := result.([]interface{})
+		if !ok {
+			t.Fatalf("got %T, want []interface{}", result)
+		}
+		if len(arr) != 3 {
+			t.Errorf("got %d elements, want 3: %v", len(arr), arr)
+		}
+	})
+
+	t.Run("strings regression", func(t *testing.T) {
+		result := eval(t, `$distinct(["a", "b", "a", "c"])`, nil)
+		arr, ok := result.([]interface{})
+		if !ok {
+			t.Fatalf("got %T, want []interface{}", result)
+		}
+		if len(arr) != 3 {
+			t.Errorf("got %d elements, want 3: %v", len(arr), arr)
+		}
+	})
+
+	t.Run("objects same content same key order", func(t *testing.T) {
+		// Two objects with identical content → deduplicated to 1.
+		result := eval(t, `$count($distinct([{"a":1,"b":2}, {"a":1,"b":2}]))`, nil)
+		if result != 1.0 {
+			t.Errorf("got %v, want 1 (objects with same content must be deduped)", result)
+		}
+	})
+
+	t.Run("objects same content different key order", func(t *testing.T) {
+		// The old fmt.Sprintf bug: {"a":1,"b":2} and {"b":2,"a":1}
+		// had different string representations but are semantically equal.
+		data := map[string]interface{}{
+			"items": []interface{}{
+				map[string]interface{}{"a": 1.0, "b": 2.0},
+				map[string]interface{}{"b": 2.0, "a": 1.0},
+			},
+		}
+		result := eval(t, `$count($distinct(items))`, data)
+		if result != 1.0 {
+			t.Errorf("got %v, want 1 (objects with same keys/values but different insertion order must be deduped)", result)
+		}
+	})
+
+	t.Run("objects different values not deduped", func(t *testing.T) {
+		result := eval(t, `$count($distinct([{"a":1,"b":2}, {"a":1,"b":99}]))`, nil)
+		if result != 2.0 {
+			t.Errorf("got %v, want 2 (objects with different values must NOT be deduped)", result)
+		}
+	})
+
+	t.Run("nested objects deduped correctly", func(t *testing.T) {
+		result := eval(t, `$count($distinct([{"x":{"y":1}}, {"x":{"y":1}}, {"x":{"y":2}}]))`, nil)
+		if result != 2.0 {
+			t.Errorf("got %v, want 2 (nested equal objects deduped, different kept)", result)
+		}
+	})
+
+	t.Run("null values", func(t *testing.T) {
+		result := eval(t, `$count($distinct([null, null, 1]))`, nil)
+		if result != 2.0 {
+			t.Errorf("got %v, want 2 (null deduped)", result)
+		}
+	})
+
+	t.Run("mixed types not deduped", func(t *testing.T) {
+		// "1" (string) and 1 (number) are different values.
+		result := eval(t, `$count($distinct(["1", 1]))`, nil)
+		if result != 2.0 {
+			t.Errorf("got %v, want 2 (string '1' and number 1 are distinct)", result)
+		}
+	})
+}
+
+// --- $match next() iterator tests ---
+
+// TestFnMatchNextProperty verifies that each match object returned by $match
+// contains a callable next() function that walks the match chain, as required
+// by the JSONata spec. This was implemented on 2026-02-26.
+func TestFnMatchNextProperty(t *testing.T) {
+	t.Run("next exists on first match", func(t *testing.T) {
+		result := eval(t, `$exists($match("hello world", /\w+/)[0].next)`, nil)
+		if result != true {
+			t.Errorf("got %v, want true (next must be present on first match)", result)
+		}
+	})
+
+	t.Run("next exists on middle match", func(t *testing.T) {
+		result := eval(t, `$exists($match("a b c", /\w+/)[1].next)`, nil)
+		if result != true {
+			t.Errorf("got %v, want true (next must be present on middle match)", result)
+		}
+	})
+
+	t.Run("next on first match returns second match string", func(t *testing.T) {
+		result := eval(t, `$match("hello world", /\w+/)[0].next().match`, nil)
+		if result != "world" {
+			t.Errorf("got %v, want 'world'", result)
+		}
+	})
+
+	t.Run("next chain: first -> second -> third", func(t *testing.T) {
+		result := eval(t, `$match("a b c", /\w+/)[0].next().next().match`, nil)
+		if result != "c" {
+			t.Errorf("got %v, want 'c'", result)
+		}
+	})
+
+	t.Run("next on last match returns undefined", func(t *testing.T) {
+		// next() on the last match must return undefined (nil in Go).
+		result := eval(t, `$exists($match("a b", /\w+/)[1].next())`, nil)
+		if result != false {
+			t.Errorf("got %v, want false (next() on last match must return undefined)", result)
+		}
+	})
+
+	t.Run("next preserves match and index fields", func(t *testing.T) {
+		result := eval(t, `$match("foo bar", /\w+/)[0].next().index`, nil)
+		if result != 4.0 {
+			t.Errorf("got %v, want 4 (index of 'bar' in 'foo bar')", result)
+		}
+	})
+
+	t.Run("next preserves groups", func(t *testing.T) {
+		result := eval(t, `$match("a1 b2", /([a-z])(\d)/)[0].next().groups[0]`, nil)
+		if result != "b" {
+			t.Errorf("got %v, want 'b'", result)
+		}
+	})
+
+	t.Run("single match has no next result", func(t *testing.T) {
+		// Only one match: next returns undefined.
+		result := eval(t, `$exists($match("hello", /\w+/)[0].next())`, nil)
+		if result != false {
+			t.Errorf("got %v, want false", result)
+		}
+	})
+}
