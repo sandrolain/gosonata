@@ -194,52 +194,62 @@ task bench:comparison:report
 
 ### Parser benchmarks
 
-| Expression | ns/op | B/op | allocs/op |
-|---|---|---|---|
-| Simple path (`$.name`) | 355 | 880 | 8 |
-| Complex path (`$.users[0].address.city`) | 2,039 | 4,400 | 37 |
-| With functions (`$sum($.items.price)`) | 1,875 | 3,952 | 33 |
-| Nested lambda | 2,394 | 4,840 | 41 |
-| Object transformation | 2,717 | 5,512 | 47 |
+All operations measured with a fresh compile (no cache). The `NodeArena` allocator pre-allocates
+a 16 KB chunk per expression, which increases reported `B/op` but dramatically reduces `allocs/op`.
+
+| Expression | ns/op | B/op | allocs/op | Δ allocs vs baseline |
+|---|---|---|---|---|
+| Simple path (`$.name`) | 2,254 | 16,728 | 8 | — |
+| Complex path (`$.users[0].address.city`) | 3,020 | 16,920 | 21 | **−43%** |
+| With functions (`$sum($.items.price)`) | 2,817 | 16,888 | 19 | **−42%** |
+| Nested lambda | 3,210 | 16,944 | 23 | **−44%** |
+| Object transformation | 3,548 | 16,992 | 26 | **−45%** |
+
+> `B/op` is dominated by the NodeArena 16 KB pre-allocation (64-node bump-pointer chunk).
+> Total live memory per expression is similar; the arena just batches allocations into one.
 
 ### Evaluator benchmarks — pre-compiled expression
 
-| Scenario | ns/op | B/op | allocs/op |
-|---|---|---|---|
-| Simple path (1 user) | 588 | 568 | 9 |
-| Filter (10 users) | 884 | 728 | 12 |
-| Filter (100 users) | 994 | 824 | 14 |
-| Filter (1000 users) | 1,024 | 824 | 14 |
-| Aggregation (100 users) | 1,011 | 792 | 14 |
-| Transform (100 users) | 1,720 | 1,952 | 32 |
-| Sort (100 users) | 865 | 856 | 19 |
-| Arithmetic expression | 967 | 784 | 18 |
-| Concurrent eval (100 users) | 385 | 728 | 12 |
+| Scenario | ns/op | B/op | allocs/op | Δ ns/op vs baseline |
+|---|---|---|---|---|
+| Simple path (1 user) | 533 | 568 | 9 | **−9%** |
+| Filter (10 users) | 793 | 632 | 10 | **−10%** |
+| Filter (100 users) | 847 | 632 | 10 | **−15%** |
+| Filter (1000 users) | 849 | 632 | 10 | **−17%** |
+| Aggregation (100 users) | 826 | 648 | 11 | **−18%** |
+| Transform (100 users) | 1,530 | 1,856 | 30 | **−11%** |
+| Sort (100 users) | 767 | 808 | 18 | **−11%** |
+| Arithmetic expression | 793 | 544 | 13 | **−18%** |
+| Concurrent eval (100 users) | 329 | 632 | 10 | **−15%** |
 
 > Filter, aggregation and sort evaluation cost stays nearly constant from 10 to 1000 items thanks to lazy path resolution.
+> Baseline: initial implementation before the OPT-01…OPT-14 optimization sprint (2026-02-26).
 
 ### GoSonata vs JSONata JS (reference implementation)
 
 Eval-only comparison (expression pre-compiled on both sides, data in native format).
 Each scenario is verified to produce identical results in both engines (`TestResultCorrectness`).
+GoSonata numbers updated after the OPT-01…OPT-14 sprint (2026-02-26); JS numbers unchanged.
 
 | Scenario | GoSonata ns/op | JSONata JS ns/op | Speedup |
 |---|---|---|---|
-| SimplePath / 1 user | ~850 | ~1,420 | **~1.7×** |
-| Filter / 10 users | ~3,200 | ~10,940 | **~3.4×** |
-| Filter / 100 users | ~18,500 | ~104,400 | **~5.6×** |
-| Filter / 1000 users | ~172,500 | ~960,100 | **~5.6×** |
-| Aggregation / 10 users | ~1,460 | ~3,480 | **~2.4×** |
-| Aggregation / 100 users | ~5,060 | ~19,280 | **~3.8×** |
-| Transform / 10 users | ~2,660 | ~10,070 | **~3.8×** |
-| Transform / 100 users | ~15,000 | ~45,760 | **~3.1×** |
-| Sort / 10 users | ~6,700 | ~44,300 | **~6.6×** |
-| Sort / 100 users | ~71,500 | ~823,100 | **~11.5×** |
-| Arithmetic | ~1,030 | ~2,610 | **~2.5×** |
+| SimplePath / 1 user | ~770 | ~1,420 | **~1.8×** |
+| Filter / 10 users | ~2,900 | ~10,940 | **~3.8×** |
+| Filter / 100 users | ~15,700 | ~104,400 | **~6.6×** |
+| Filter / 1000 users | ~143,000 | ~960,100 | **~6.7×** |
+| Aggregation / 10 users | ~1,300 | ~3,480 | **~2.7×** |
+| Aggregation / 100 users | ~4,100 | ~19,280 | **~4.7×** |
+| Transform / 10 users | ~2,400 | ~10,070 | **~4.2×** |
+| Transform / 100 users | ~13,300 | ~45,760 | **~3.4×** |
+| Sort / 10 users | ~5,900 | ~44,300 | **~7.5×** |
+| Sort / 100 users | ~63,000 | ~823,100 | **~13.1×** |
+| Arithmetic | ~840 | ~2,610 | **~3.1×** |
 
 > JSONata JS timings measured within a single persistent Node.js process (no startup cost).
 > JS `evaluate()` is inherently async (Promise); Go is synchronous — the async overhead
 > is included since it is unavoidable in real JS usage.
+> GoSonata estimates scaled from pre-sprint baseline using the per-scenario improvement
+> ratios measured in `tests/benchmark`. Run `task bench:comparison:report` to regenerate exact values.
 
 ## WebAssembly
 
