@@ -75,14 +75,17 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 			}
 
 			// Create context with appropriate data for the next path step
+			// OPT-02: acquire from pool for the common (non-CV-with-parentObj) case.
 			var itemCtx *EvalContext
+			pooledItemCtx := false
 			if cv, ok := item.(*contextBoundValue); ok && cv.parentObj != nil && cv.parent == nil {
 				// This CV carries parent-object info for % semantics (not @$ rewind).
 				// Create a parent context with the container object, then create the array item context.
 				parentObjCtx := evalCtx.NewChildContext(cv.parentObj)
 				itemCtx = parentObjCtx.NewArrayItemContext(contextData)
 			} else {
-				itemCtx = evalCtx.NewArrayItemContext(contextData)
+				itemCtx = acquireEvalCtx(contextData, evalCtx, true)
+				pooledItemCtx = true
 			}
 			// Apply inherited bindings from @$ / #$ operators
 			if len(inheritedBindings) > 0 {
@@ -135,7 +138,7 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 								result = append(result, &contextBoundValue{
 									value:     subItem,
 									parent:    nil,
-									bindings:  map[string]interface{}{},
+									bindings:  nil, // OPT-03: nil is handled by extractBoundItem
 									parentObj: actualItem,
 								})
 							} else {
@@ -146,6 +149,11 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 						result = append(result, value)
 					}
 				}
+			}
+			// OPT-02: return pooled item context to pool (happy path).
+			// Error paths skip this via early return; that is acceptable for a pool.
+			if pooledItemCtx {
+				releaseEvalCtx(itemCtx)
 			}
 		}
 

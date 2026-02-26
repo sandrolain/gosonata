@@ -74,3 +74,56 @@ func releaseBuf(b *bytes.Buffer) {
 		bufPool.Put(b)
 	}
 }
+
+// evalCtxPool is a process-wide pool of *EvalContext used in hot per-item
+// evaluation loops (evalPath, evalObjects) to avoid a heap allocation for every
+// element in an iterated array.
+//
+// THREAD-SAFETY AUDIT: safe.
+//   - sync.Pool is designed for concurrent use.
+//   - Each caller receives exclusive ownership via acquireEvalCtx; the context
+//     is never shared between goroutines.
+//   - Callers MUST NOT call releaseEvalCtx if the context was captured by a
+//     lambda (c.escaped == true); markEscaped() ensures this.
+var evalCtxPool = sync.Pool{
+	New: func() interface{} { return new(EvalContext) },
+}
+
+// acquireEvalCtx returns a reset EvalContext from the pool configured as an
+// array-item child of parent (or as a plain child when isArrayItem is false).
+func acquireEvalCtx(data interface{}, parent *EvalContext, isArrayItem bool) *EvalContext {
+	c := evalCtxPool.Get().(*EvalContext)
+	c.data = data
+	c.parent = parent
+	if parent != nil {
+		c.root = parent.root
+		c.depth = parent.depth + 1
+	} else {
+		c.root = c
+		c.depth = 0
+	}
+	c.isArrayItem = isArrayItem
+	c.bindings = nil
+	c.tcoTail = false
+	c.escaped = false
+	c.nowTime = nil
+	return c
+}
+
+// releaseEvalCtx returns c to the pool. It is a no-op when c is nil or has
+// been marked escaped (meaning a lambda closure holds a reference to it).
+// All pointer fields are cleared before pooling to avoid retaining heap objects.
+func releaseEvalCtx(c *EvalContext) {
+	if c == nil || c.escaped {
+		return
+	}
+	c.data = nil
+	c.parent = nil
+	c.root = nil
+	c.bindings = nil
+	c.depth = 0
+	c.isArrayItem = false
+	c.tcoTail = false
+	c.nowTime = nil
+	evalCtxPool.Put(c)
+}

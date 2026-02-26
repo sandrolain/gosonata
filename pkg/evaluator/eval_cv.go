@@ -7,15 +7,13 @@ type contextBoundValue struct {
 	parentObj interface{}            // the containing object for % operator (distinct from @ semantics)
 }
 
-// extractBoundItem unpacks a contextBoundValue, returning value and bindings (empty map if plain).
+// extractBoundItem unpacks a contextBoundValue, returning value and bindings.
+// Returns nil bindings when there are none; callers use len(bindings) > 0 to guard.
+// OPT-03: no longer allocates an empty map for CVs with nil bindings.
 
 func extractBoundItem(item interface{}) (value interface{}, bindings map[string]interface{}) {
 	if cv, ok := item.(*contextBoundValue); ok {
-		b := cv.bindings
-		if b == nil {
-			b = map[string]interface{}{}
-		}
-		return cv.value, b
+		return cv.value, cv.bindings // nil is fine; callers guard with len(bindings) > 0
 	}
 	return item, nil
 }

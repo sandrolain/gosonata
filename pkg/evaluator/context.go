@@ -31,6 +31,11 @@ type EvalContext struct {
 	// allocation on every binary operator evaluation.
 	tcoTail bool
 
+	// escaped is set by markEscaped() when this context is captured by a lambda
+	// closure. OPT-02: releaseEvalCtx is a no-op for escaped contexts so they
+	// are never returned to the pool while still reachable via a Lambda.Ctx chain.
+	escaped bool
+
 	// nowTime caches the current time for the duration of a single evaluation.
 	// It is stored only on the root context and lazily initialised on first use.
 	// This makes $now() / $millis() consistent within one expression while
@@ -176,6 +181,21 @@ func (c *EvalContext) NowTime() time.Time {
 		root.nowTime = &t
 	}
 	return *root.nowTime
+}
+
+// markEscaped marks this context and every ancestor as escaped from the pool.
+// Call before storing an *EvalContext in a long-lived structure (e.g. a Lambda
+// closure). Walking up the parent chain ensures that ancestors reachable via
+// GetBinding / % operator are also protected from being pooled and reused while
+// a live lambda still holds an indirect reference to them.
+// OPT-02: pairs with releaseEvalCtx which is a no-op for escaped contexts.
+func (c *EvalContext) markEscaped() {
+	for node := c; node != nil; node = node.parent {
+		if node.escaped {
+			break // already marked; ancestors were marked in a prior call
+		}
+		node.escaped = true
+	}
 }
 
 // String returns a string representation of the context.

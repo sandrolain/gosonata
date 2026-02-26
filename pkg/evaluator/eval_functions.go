@@ -231,6 +231,10 @@ func (e *Evaluator) evalLambda(node *types.ASTNode, evalCtx *EvalContext) (inter
 	// We store evalCtx directly (not cloned) so that the lambda can see
 	// bindings added AFTER lambda creation in the same block scope (enables recursion).
 	// callLambda() creates its own clone of this context at call time.
+	// OPT-02: mark the context as escaped before capturing it in the lambda closure.
+	// This walks up the parent chain so that the entire ancestor chain is protected
+	// from being returned to the evalCtxPool while the lambda is alive.
+	evalCtx.markEscaped()
 	lambda := &Lambda{
 		Params:    params,
 		Body:      node.RHS, // Body is in RHS
