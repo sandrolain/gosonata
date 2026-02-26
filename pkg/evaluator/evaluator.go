@@ -68,6 +68,9 @@ type EvalOptions struct {
 	Logger *slog.Logger
 	// CustomFunctions holds user-defined functions to register with the evaluator.
 	CustomFunctions []functions.CustomFunctionDef
+	// AdvancedCustomFunctions holds higher-order user-defined functions that
+	// need to call back into the evaluator (e.g. $groupBy, $mapValues).
+	AdvancedCustomFunctions []functions.AdvancedCustomFunctionDef
 }
 
 // defaultConcurrency controls the default value of EvalOptions.Concurrency for
@@ -106,7 +109,7 @@ func New(opts ...EvalOption) *Evaluator {
 	}
 
 	// Build custom function lookup map.
-	customFns := make(map[string]*FunctionDef, len(options.CustomFunctions))
+	customFns := make(map[string]*FunctionDef, len(options.CustomFunctions)+len(options.AdvancedCustomFunctions))
 	for _, cfd := range options.CustomFunctions {
 		// Capture loop variable.
 		cfd := cfd
@@ -116,6 +119,18 @@ func New(opts ...EvalOption) *Evaluator {
 			MaxArgs: -1, // unlimited; type-checking done via Signature if set
 			Impl: func(ctx context.Context, _ *Evaluator, _ *EvalContext, args []interface{}) (interface{}, error) {
 				return cfd.Fn(ctx, args...)
+			},
+		}
+	}
+	for _, cfd := range options.AdvancedCustomFunctions {
+		cfd := cfd
+		customFns[cfd.Name] = &FunctionDef{
+			Name:    cfd.Name,
+			MinArgs: 0,
+			MaxArgs: -1,
+			Impl: func(ctx context.Context, ev *Evaluator, ec *EvalContext, args []interface{}) (interface{}, error) {
+				caller := &callerAdapter{e: ev, ec: ec}
+				return cfd.Fn(ctx, caller, args...)
 			},
 		}
 	}
@@ -131,6 +146,17 @@ func New(opts ...EvalOption) *Evaluator {
 // Cache returns the expression cache, or nil if caching is disabled.
 func (e *Evaluator) Cache() *cache.Cache {
 	return e.cache
+}
+
+// callerAdapter wraps the evaluator so that AdvancedCustomFunc implementations
+// can call function values (lambdas, built-ins) passed as arguments.
+type callerAdapter struct {
+	e  *Evaluator
+	ec *EvalContext
+}
+
+func (c *callerAdapter) Call(ctx context.Context, fn interface{}, args ...interface{}) (interface{}, error) {
+	return c.e.callHOFFn(ctx, c.ec, fn, args)
 }
 
 // getCustomFunction returns a user-defined custom function by name, or (nil, false).
@@ -325,6 +351,32 @@ func WithCustomFunction(name, signature string, fn functions.CustomFunc) EvalOpt
 			Signature: signature,
 			Fn:        fn,
 		})
+	}
+}
+
+// WithFunctions registers any mix of [functions.CustomFunctionDef] and
+// [functions.AdvancedCustomFunctionDef] in a single variadic call.
+// Both types implement the [functions.FunctionEntry] interface, so you can
+// spread a typed slice directly:
+//
+//	gosonata.WithFunctions(extstring.AllEntries()...)
+//	gosonata.WithFunctions(extarray.AllEntries()...)
+//
+// or mix both kinds:
+//
+//	gosonata.WithFunctions(
+//	    append(extstring.AllEntries(), extarray.AllEntries()...)...,
+//	)
+func WithFunctions(defs ...functions.FunctionEntry) EvalOption {
+	return func(opts *EvalOptions) {
+		for _, def := range defs {
+			switch d := def.(type) {
+			case functions.CustomFunctionDef:
+				opts.CustomFunctions = append(opts.CustomFunctions, d)
+			case functions.AdvancedCustomFunctionDef:
+				opts.AdvancedCustomFunctions = append(opts.AdvancedCustomFunctions, d)
+			}
+		}
 	}
 }
 

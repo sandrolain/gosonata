@@ -133,6 +133,10 @@ func MustCompile(query string) *types.Expression {
 // See WithCustomFunction.
 type CustomFunc = functions.CustomFunc
 
+// CustomFunctionDef is a type alias for [functions.CustomFunctionDef],
+// re-exported so callers only need to import the top-level gosonata package.
+type CustomFunctionDef = functions.CustomFunctionDef
+
 // EvalOption is a type alias for evaluator.EvalOption so callers do not need to
 // import the evaluator package directly.
 type EvalOption = evaluator.EvalOption
@@ -164,6 +168,30 @@ func WithDebug(enabled bool) EvalOption { return evaluator.WithDebug(enabled) }
 //	)
 func WithCustomFunction(name, signature string, fn CustomFunc) EvalOption {
 	return evaluator.WithCustomFunction(name, signature, fn)
+}
+
+// AdvancedCustomFunc is the signature for higher-order user-defined functions
+// that receive a Caller to invoke function arguments from JSONata expressions.
+type AdvancedCustomFunc = functions.AdvancedCustomFunc
+
+// AdvancedCustomFunctionDef is a type alias for [functions.AdvancedCustomFunctionDef],
+// re-exported so callers only need to import the top-level gosonata package.
+type AdvancedCustomFunctionDef = functions.AdvancedCustomFunctionDef
+
+// FunctionEntry is a type alias for functions.FunctionEntry, the common interface
+// implemented by both [functions.CustomFunctionDef] and [functions.AdvancedCustomFunctionDef].
+// It allows mixing both kinds in a single call to [WithFunctions].
+type FunctionEntry = functions.FunctionEntry
+
+// WithFunctions registers any mix of [CustomFunctionDef] and [AdvancedCustomFunctionDef]
+// in a single variadic call. Use it to spread the result of AllEntries() from any ext
+// sub-package:
+//
+//	gosonata.WithFunctions(extstring.AllEntries()...)
+//	gosonata.WithFunctions(extarray.AllEntries()...)
+//	gosonata.WithFunctions(ext.AllEntries()...)
+func WithFunctions(defs ...functions.FunctionEntry) EvalOption {
+	return evaluator.WithFunctions(defs...)
 }
 
 // StreamResult re-exports evaluator.StreamResult for callers that only import gosonata.
