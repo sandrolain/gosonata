@@ -35,28 +35,27 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 	// Check if RHS is a direct number (index access) without evaluating variables
 	// This avoids evaluating predicates like [$<=3] with wrong context
 	if node.RHS.Type == types.NodeNumber {
-		indexFloat, ok := node.RHS.Value.(float64)
-		if ok {
-			// Get array from collection
-			arr, err := e.toArray(collection)
-			if err != nil {
-				return nil, err
-			}
-
-			index := int(indexFloat)
-
-			// Handle negative indices (from end)
-			if index < 0 {
-				index = len(arr) + index
-			}
-
-			// Check bounds
-			if index < 0 || index >= len(arr) {
-				return nil, nil
-			}
-
-			return arr[index], nil
+		// OPT-12: NodeNumber always has NumValue set by parser — no type assertion needed.
+		indexFloat := node.RHS.NumValue
+		// Get array from collection
+		arr, err := e.toArray(collection)
+		if err != nil {
+			return nil, err
 		}
+
+		index := int(indexFloat)
+
+		// Handle negative indices (from end)
+		if index < 0 {
+			index = len(arr) + index
+		}
+
+		// Check bounds
+		if index < 0 || index >= len(arr) {
+			return nil, nil
+		}
+
+		return arr[index], nil
 	}
 
 	// For expressions that might be indices (like variables, unary minus, etc.)

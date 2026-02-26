@@ -19,10 +19,8 @@ func (e *Evaluator) evalNumber(node *types.ASTNode) (interface{}, error) {
 // evalRegex evaluates a regex literal.
 
 func (e *Evaluator) evalRegex(node *types.ASTNode) (interface{}, error) {
-	pattern, ok := node.Value.(string)
-	if !ok {
-		return nil, fmt.Errorf("invalid regex pattern type")
-	}
+	// OPT-12: StrValue is always set by parser for NodeRegex — no type assertion needed.
+	pattern := node.StrValue
 
 	// Compile the regex pattern (already converted to Go format by lexer).
 	// Uses the process-wide regex cache to avoid repeated compilation.
@@ -43,7 +41,7 @@ func (e *Evaluator) evalBoolean(node *types.ASTNode) (interface{}, error) {
 // evalName evaluates a name (field reference).
 
 func (e *Evaluator) evalName(node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	name := node.Value.(string)
+	name := node.StrValue
 	return e.evalNameString(name, evalCtx)
 }
 
@@ -113,7 +111,7 @@ func (e *Evaluator) evalNameString(name string, evalCtx *EvalContext) (interface
 // evalVariable evaluates a variable reference.
 
 func (e *Evaluator) evalVariable(node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	varName := node.Value.(string)
+	varName := node.StrValue
 
 	// $ refers to current context
 	if varName == "" {

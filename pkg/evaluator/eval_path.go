@@ -13,7 +13,7 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 
 	if node.LHS.Type == types.NodeString {
 		// String literal as LHS means field name lookup in current context
-		fieldName := node.LHS.Value.(string)
+		fieldName := node.LHS.StrValue
 		left, err = e.evalNameString(fieldName, evalCtx)
 	} else {
 		// Normal evaluation of LHS
@@ -95,7 +95,7 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 			// Evaluate right side in item context
 			var value interface{}
 			if node.RHS.Type == types.NodeString {
-				value, err = e.evalNameString(node.RHS.Value.(string), itemCtx)
+				value, err = e.evalNameString(node.RHS.StrValue, itemCtx)
 			} else if node.RHS.Type == types.NodeName {
 				value, err = e.evalName(node.RHS, itemCtx)
 			} else if node.RHS.Type == types.NodeFunction && node.RHS.LHS != nil && node.RHS.LHS.Type == types.NodeLambda {
@@ -192,7 +192,7 @@ func (e *Evaluator) evalPath(ctx context.Context, node *types.ASTNode, evalCtx *
 	pathCtx := evalCtx.NewChildContext(left)
 
 	if node.RHS.Type == types.NodeString {
-		return e.evalNameString(node.RHS.Value.(string), pathCtx)
+		return e.evalNameString(node.RHS.StrValue, pathCtx)
 	}
 	if node.RHS.Type == types.NodeName {
 		return e.evalName(node.RHS, pathCtx)
@@ -217,7 +217,7 @@ func (e *Evaluator) evalDescendent(ctx context.Context, node *types.ASTNode, eva
 
 	if node.LHS.Type == types.NodeString {
 		// String literal as LHS means field name lookup in current context
-		fieldName := node.LHS.Value.(string)
+		fieldName := node.LHS.StrValue
 		left, err = e.evalNameString(fieldName, evalCtx)
 	} else {
 		// Normal evaluation of LHS
@@ -364,7 +364,7 @@ func (e *Evaluator) evalDescendent(ctx context.Context, node *types.ASTNode, eva
 		// Evaluate RHS in candidate context
 		var value interface{}
 		if node.RHS.Type == types.NodeString {
-			value, err = e.evalNameString(node.RHS.Value.(string), candCtx)
+			value, err = e.evalNameString(node.RHS.StrValue, candCtx)
 		} else if node.RHS.Type == types.NodeName {
 			value, err = e.evalName(node.RHS, candCtx)
 		} else {

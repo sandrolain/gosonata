@@ -11,7 +11,7 @@ import (
 )
 
 func (e *Evaluator) evalBinary(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	op := node.Value.(string)
+	op := node.StrValue
 
 	// OPT-01: Binary operands are never in tail position. Clear the TCO flag on the shared
 	// EvalContext (cheap bool field write) instead of wrapping context with context.WithValue.
@@ -146,7 +146,7 @@ func (e *Evaluator) evalBinary(ctx context.Context, node *types.ASTNode, evalCtx
 // evalUnary evaluates a unary operator expression.
 
 func (e *Evaluator) evalUnary(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	op := node.Value.(string)
+	op := node.StrValue
 
 	// Evaluate operand
 	operand, err := e.evalNode(ctx, node.LHS, evalCtx)

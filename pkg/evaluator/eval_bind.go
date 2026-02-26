@@ -15,7 +15,7 @@ func (e *Evaluator) evalBind(ctx context.Context, node *types.ASTNode, evalCtx *
 	}
 
 	// Set the binding
-	varName := node.Value.(string)
+	varName := node.StrValue
 	evalCtx.SetBinding(varName, value)
 
 	return value, nil

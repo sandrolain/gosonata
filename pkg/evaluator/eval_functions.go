@@ -91,8 +91,8 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 			// syntax (e.g. $greet(...)) but "greet" has no variable binding.
 			// Fall through to the custom/built-in lookup using the variable name.
 			if callableValue == nil && node.LHS != nil && node.LHS.Type == types.NodeVariable {
-				varName, ok := node.LHS.Value.(string)
-				if ok {
+				varName := node.LHS.StrValue
+				if varName != "" {
 					if fnDef, found := e.getCustomFunction(varName); found {
 						args := make([]interface{}, 0, len(node.Arguments))
 						for _, argNode := range node.Arguments {
@@ -112,7 +112,7 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 	}
 
 	// Built-in / custom function call
-	funcName := node.Value.(string)
+	funcName := node.StrValue
 
 	// Check custom (user-registered) functions first, then built-ins.
 	fnDef, ok := e.getCustomFunction(funcName)
@@ -211,7 +211,7 @@ func (e *Evaluator) evalLambda(node *types.ASTNode, evalCtx *EvalContext) (inter
 	for _, argNode := range node.Arguments {
 		if argNode.Type == types.NodeVariable {
 			// Parameter is a variable like $x
-			paramName := argNode.Value.(string)
+			paramName := argNode.StrValue
 			params = append(params, paramName)
 		}
 	}
@@ -265,13 +265,10 @@ func (e *Evaluator) evalPartial(ctx context.Context, node *types.ASTNode, evalCt
 
 	// Check if partial application is allowed
 	// It's only allowed when calling through a variable/lambda (node.LHS != nil)
-	// Direct function calls (node.Value is string) are not allowed
-	if node.LHS == nil && node.Value != nil {
+	// Direct function calls (StrValue non-empty) are not allowed
+	if node.LHS == nil && node.StrValue != "" {
 		// Direct function call with placeholder
-		funcName, ok := node.Value.(string)
-		if !ok {
-			return nil, types.NewError("T1007", "partial application can only be applied to a function", node.Position)
-		}
+		funcName := node.StrValue
 
 		// Check if function exists
 		if _, exists := GetFunction(funcName); !exists {
@@ -305,6 +302,7 @@ func (e *Evaluator) evalPartial(ctx context.Context, node *types.ASTNode, evalCt
 	// Build the body: a function call with placeholders replaced by variables
 	bodyNode := types.NewASTNode(types.NodeFunction, node.Position)
 	bodyNode.Value = node.Value
+	bodyNode.StrValue = node.StrValue
 	bodyNode.LHS = node.LHS
 	bodyNode.Arguments = make([]*types.ASTNode, len(node.Arguments))
 
@@ -314,6 +312,7 @@ func (e *Evaluator) evalPartial(ctx context.Context, node *types.ASTNode, evalCt
 			// Replace placeholder with variable reference
 			varNode := types.NewASTNode(types.NodeVariable, arg.Position)
 			varNode.Value = params[placeholderIndex]
+			varNode.StrValue = params[placeholderIndex]
 			bodyNode.Arguments[i] = varNode
 			placeholderIndex++
 		} else {

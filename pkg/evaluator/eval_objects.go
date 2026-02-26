@@ -435,7 +435,7 @@ func (e *Evaluator) evalObjectGrouped(ctx context.Context, node *types.ASTNode, 
 func (e *Evaluator) evalObjectKeys(ctx context.Context, keyNode *types.ASTNode, evalCtx *EvalContext, literal bool) ([]string, error) {
 	// For string literals, use the value directly
 	if keyNode.Type == types.NodeString {
-		return []string{keyNode.Value.(string)}, nil
+		return []string{keyNode.StrValue}, nil
 	}
 
 	// NodeName keys are ALWAYS evaluated as expressions (never treated as string literals).

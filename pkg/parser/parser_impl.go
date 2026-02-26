@@ -392,6 +392,7 @@ func (p *Parser) parseString() (*types.ASTNode, error) {
 	}
 
 	node.Value = unescaped
+	node.StrValue = unescaped
 	p.advance()
 	return node, nil
 }
@@ -407,6 +408,7 @@ func (p *Parser) parseNumber() (*types.ASTNode, error) {
 	}
 
 	node.Value = val
+	node.NumValue = val
 	p.advance()
 	return node, nil
 }
@@ -431,6 +433,7 @@ func (p *Parser) parseNull() (*types.ASTNode, error) {
 func (p *Parser) parseName() (*types.ASTNode, error) {
 	node := p.newNode(types.NodeName, p.current.Position)
 	node.Value = p.current.Value
+	node.StrValue = p.current.Value
 	p.advance()
 	return node, nil
 }
@@ -441,6 +444,7 @@ func (p *Parser) parseNameFromKeyword() (*types.ASTNode, error) {
 	node := p.newNode(types.NodeName, p.current.Position)
 	// Use the string representation of the keyword as the name
 	node.Value = p.current.Type.String()
+	node.StrValue = p.current.Type.String()
 	p.advance()
 	return node, nil
 }
@@ -449,6 +453,7 @@ func (p *Parser) parseNameFromKeyword() (*types.ASTNode, error) {
 func (p *Parser) parseVariable() (*types.ASTNode, error) {
 	node := p.newNode(types.NodeVariable, p.current.Position)
 	node.Value = p.current.Value // Empty string for $, or variable name
+	node.StrValue = p.current.Value
 	p.advance()
 	return node, nil
 }
@@ -466,6 +471,7 @@ func (p *Parser) parseUnaryMinus() (*types.ASTNode, error) {
 
 	node := p.newNode(types.NodeUnary, pos)
 	node.Value = "-"
+	node.StrValue = "-"
 	node.LHS = expr
 
 	return node, nil
@@ -486,6 +492,7 @@ func (p *Parser) parseUnaryComparison() (*types.ASTNode, error) {
 
 	node := p.newNode(types.NodeUnary, pos)
 	node.Value = op
+	node.StrValue = op
 	node.LHS = expr
 
 	return node, nil
@@ -500,6 +507,7 @@ func (p *Parser) parseParent() (*types.ASTNode, error) {
 
 	node := p.newNode(types.NodeParent, pos)
 	node.Value = "%"
+	node.StrValue = "%"
 
 	// Count consecutive % to allow %.% for grandparent, %.%.% for great-grandparent, etc.
 	// We'll let parseInfix handle chaining: %.%. creates NodePath with NodeParent as left side
@@ -635,6 +643,7 @@ func (p *Parser) parseObjectConstructor() (*types.ASTNode, error) {
 		// Create a pair node (we use a binary node with special marker)
 		pair := p.newNode(types.NodeBinary, key.Position)
 		pair.Value = ":"
+		pair.StrValue = ":"
 		pair.LHS = key
 		pair.RHS = value
 
@@ -793,6 +802,7 @@ func (p *Parser) parseDescendentPrefix() (*types.ASTNode, error) {
 	// Create implicit current context reference ($)
 	left := p.newNode(types.NodeVariable, pos)
 	left.Value = ""
+	left.StrValue = ""
 
 	// If there's a right-hand side, parse it
 	var right *types.ASTNode
@@ -835,6 +845,7 @@ func (p *Parser) parseWildcard() (*types.ASTNode, error) {
 func (p *Parser) parseRegex() (*types.ASTNode, error) {
 	node := p.newNode(types.NodeRegex, p.current.Position)
 	node.Value = p.current.Value // Pattern with flags already converted by lexer
+	node.StrValue = p.current.Value
 	p.advance()
 	return node, nil
 }
@@ -886,6 +897,7 @@ func (p *Parser) parseBinaryOp(left *types.ASTNode) (*types.ASTNode, error) {
 
 	node := p.newNode(types.NodeBinary, op.Position)
 	node.Value = operatorString(op.Type)
+	node.StrValue = operatorString(op.Type)
 	node.LHS = left
 	node.RHS = right
 
@@ -1006,6 +1018,7 @@ func (p *Parser) parseLambda() (*types.ASTNode, error) {
 
 			param := p.newNode(types.NodeVariable, p.current.Position)
 			param.Value = p.current.Value
+			param.StrValue = p.current.Value
 			node.Arguments = append(node.Arguments, param)
 			p.advance()
 
@@ -1094,6 +1107,7 @@ func (p *Parser) parseRange(left *types.ASTNode) (*types.ASTNode, error) {
 
 	node := p.newNode(types.NodeBinary, pos)
 	node.Value = ".."
+	node.StrValue = ".."
 	node.LHS = left
 	node.RHS = right
 
@@ -1115,6 +1129,7 @@ func (p *Parser) parseApply(left *types.ASTNode) (*types.ASTNode, error) {
 
 	node := p.newNode(types.NodeBinary, pos)
 	node.Value = "~>"
+	node.StrValue = "~>"
 	node.LHS = left
 	node.RHS = right
 
@@ -1160,6 +1175,7 @@ func (p *Parser) parseSort(left *types.ASTNode) (*types.ASTNode, error) {
 	node := p.newNode(types.NodeSort, pos)
 	node.LHS = left // The sequence to sort
 	node.Value = "^"
+	node.StrValue = "^"
 
 	if len(sortKeys) == 1 {
 		node.RHS = sortKeys[0] // Single sort key for backward compat
@@ -1192,8 +1208,9 @@ func (p *Parser) parseAssignment(left *types.ASTNode) (*types.ASTNode, error) {
 
 	node := p.newNode(types.NodeBind, pos)
 	node.Value = left.Value // Variable name
-	node.LHS = left         // Variable node
-	node.RHS = right        // Value expression
+	node.StrValue = left.StrValue
+	node.LHS = left  // Variable node
+	node.RHS = right // Value expression
 
 	return node, nil
 }

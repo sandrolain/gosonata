@@ -93,9 +93,9 @@ func (e *Evaluator) evalApply(ctx context.Context, node *types.ASTNode, evalCtx 
 			if err != nil {
 				return nil, err
 			}
-		} else if innerFnNode.Value != nil {
+		} else if innerFnNode.StrValue != "" {
 			// Named function call
-			funcName := innerFnNode.Value.(string)
+			funcName := innerFnNode.StrValue
 			fnDef, ok := GetFunction(funcName)
 			if !ok {
 				return nil, fmt.Errorf("unknown function: %s", funcName)
@@ -172,8 +172,8 @@ func (e *Evaluator) evalApply(ctx context.Context, node *types.ASTNode, evalCtx 
 		fnNode := node.RHS
 
 		// If it's a built-in function call (Value contains name)
-		if fnNode.Value != nil {
-			funcName := fnNode.Value.(string)
+		if fnNode.StrValue != "" {
+			funcName := fnNode.StrValue
 			fnDef, ok := GetFunction(funcName)
 			if !ok {
 				return nil, fmt.Errorf("unknown function: %s", funcName)
@@ -276,20 +276,23 @@ func (e *Evaluator) createComposition(leftFn, rightFn interface{}, evalCtx *Eval
 	// First, call leftFn with the parameter
 	leftCallNode := types.NewASTNode(types.NodeFunction, 0)
 	leftCallNode.LHS = &types.ASTNode{
-		Type:  types.NodeVariable,
-		Value: "leftFn",
+		Type:     types.NodeVariable,
+		Value:    "leftFn",
+		StrValue: "leftFn",
 	}
 	leftCallNode.Arguments = []*types.ASTNode{
 		{
-			Type:  types.NodeVariable,
-			Value: "1", // Parameter name
+			Type:     types.NodeVariable,
+			Value:    "1", // Parameter name
+			StrValue: "1",
 		},
 	}
 
 	// Then call rightFn with the result
 	bodyNode.LHS = &types.ASTNode{
-		Type:  types.NodeVariable,
-		Value: "rightFn",
+		Type:     types.NodeVariable,
+		Value:    "rightFn",
+		StrValue: "rightFn",
 	}
 	bodyNode.Arguments = []*types.ASTNode{leftCallNode}
 

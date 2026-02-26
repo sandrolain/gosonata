@@ -65,6 +65,8 @@ const (
 type ASTNode struct {
 	Type     NodeType
 	Value    interface{}
+	StrValue string  // Pre-typed string value; set by parser for all string-valued nodes (eliminates .(string) assertions in evaluator)
+	NumValue float64 // Pre-typed numeric value; set by parser for NodeNumber (eliminates .(float64) assertions in evaluator)
 	Position int
 
 	// Relations

@@ -7,7 +7,7 @@ import (
 )
 
 func (e *Evaluator) evalContextBind(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	varName := node.RHS.Value.(string) // e.g. "l" for @$l
+	varName := node.RHS.StrValue // e.g. "l" for @$l
 
 	// Determine parent data for the rewind:
 	// - When LHS is a path (A.B), parent = value of A evaluated in evalCtx
@@ -76,7 +76,7 @@ func (e *Evaluator) evalContextBind(ctx context.Context, node *types.ASTNode, ev
 // The items themselves are unchanged; $var is available in subsequent filter/path steps.
 
 func (e *Evaluator) evalIndexBind(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	varName := node.RHS.Value.(string) // e.g. "i" for #$i
+	varName := node.RHS.StrValue // e.g. "i" for #$i
 
 	// Evaluate LHS to obtain the sequence of items
 	left, err := e.evalNode(ctx, node.LHS, evalCtx)
