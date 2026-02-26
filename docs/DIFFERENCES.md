@@ -1,7 +1,7 @@
 # GoSonata Differences and Implementation Notes
 
 **Version**: 0.1.0-dev
-**Last Updated**: February 22, 2026
+**Last Updated**: February 26, 2026
 **Reference**: JSONata 2.1.0+ (JavaScript)
 
 ## Table of Contents
@@ -11,6 +11,7 @@
 - [API Design Differences](#api-design-differences)
 - [Implementation Differences](#implementation-differences)
 - [Known Limitations](#known-limitations)
+- [Extension Functions](#extension-functions)
 - [Advantages over Other Implementations](#advantages-over-other-implementations)
 - [Comparison with go-jsonata v206](#comparison-with-go-jsonata-v206)
 - [Migration Notes](#migration-notes)
@@ -687,6 +688,47 @@ type OrderedObject struct {
 - Custom functions accept the signature param but it is not enforced
 
 **Roadmap**: Full signature validation planned for a future release.
+
+---
+
+## Extension Functions
+
+GoSonata ships a `pkg/ext` library of optional functions beyond the JSONata 2.1.0+
+specification. Because they are **not part of the standard**, they are off by
+default and must be explicitly opted in, ensuring that expressions evaluated without
+extension options remain portable to other compliant JSONata implementations.
+
+See [API.md — Extension Functions](API.md#extension-functions-pkgext) for the
+complete function reference and all usage patterns.
+
+**Quick start**:
+
+```go
+import (
+    "github.com/sandrolain/gosonata"
+    "github.com/sandrolain/gosonata/pkg/ext"
+)
+
+// All extensions
+result, err := gosonata.Eval(`$uuid()`, nil, ext.WithAll())
+
+// Single category
+result, err = gosonata.Eval(`$chunk(items, 3)`, data, ext.WithArray())
+```
+
+**Extension categories summary**:
+
+| Package | # functions | Notable additions |
+|---------|-------------|-------------------|
+| `extstring` | 12 | `$camelCase`, `$template`, `$startsWith`, `$endsWith` |
+| `extnumeric` | 16 | `$median`, `$stddev`, `$clamp`, trig functions |
+| `extarray` | 14 + 6 HOF | `$chunk`, `$flatten`, set ops, `$groupBy`, `$accumulate` |
+| `extobject` | 9 + 2 HOF | `$pick`, `$omit`, `$deepMerge`, `$mapValues` |
+| `exttypes` | 11 | `$isString`, `$isEmpty`, `$default`, `$identity` |
+| `extdatetime` | 5 | `$dateAdd`, `$dateDiff`, `$dateComponents` |
+| `extcrypto` | 3 | `$uuid`, `$hash`, `$hmac` |
+| `extformat` | 3 | `$csv`, `$toCSV`, Go template |
+| `extfunc` | 2 HOF | `$pipe`, `$memoize` |
 
 ---
 

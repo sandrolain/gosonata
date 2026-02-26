@@ -1,7 +1,7 @@
 # GoSonata API Reference
 
 **Version**: 0.1.0-dev
-**Last Updated**: February 22, 2026
+**Last Updated**: February 26, 2026
 **Go Version**: 1.26.0+
 
 ## Table of Contents
@@ -24,6 +24,7 @@
   - [StreamResult](#streamresult)
 - [Types Package](#types-package)
 - [Functions Package](#functions-package)
+- [Extension Functions (pkg/ext)](#extension-functions-pkgext)
 - [Error Handling](#error-handling)
 - [Advanced Usage](#advanced-usage)
 - [Examples](#examples)
@@ -1011,6 +1012,262 @@ def := functions.CustomFunctionDef{
         return args[0].(float64) * 2, nil
     },
 }
+
+---
+
+## Extension Functions (`pkg/ext`)
+
+GoSonata ships an optional library of extension functions that go beyond the official
+JSONata 2.1.0+ specification. They are **off by default** and must be explicitly
+registered via `WithFunctions` (or the `ext.*` category helpers).
+
+### Import paths
+
+```go
+import "github.com/sandrolain/gosonata/pkg/ext"          // top-level helpers
+import "github.com/sandrolain/gosonata/pkg/ext/extstring" // individual category
+// …etc.
+```
+
+### `WithFunctions`
+
+```go
+func WithFunctions(defs ...functions.FunctionEntry) EvalOption
+```
+
+Registers any mix of `CustomFunctionDef` and `AdvancedCustomFunctionDef` in a single
+variadic call. Both types implement `functions.FunctionEntry`, so you can spread
+a typed slice directly.
+
+Re-exported at the top level as `gosonata.WithFunctions`.
+
+**Example — register all extensions at once**:
+
+```go
+import (
+    "github.com/sandrolain/gosonata"
+    "github.com/sandrolain/gosonata/pkg/ext"
+)
+
+result, err := gosonata.Eval(`$startsWith($.name, "Go")`, data,
+    ext.WithAll(),
+)
+```
+
+**Example — register by category**:
+
+```go
+result, err := gosonata.Eval(`$chunk(items, 3)`, data,
+    ext.WithArray(),
+    ext.WithString(),
+)
+```
+
+**Example — spread a specific sub-package**:
+
+```go
+import extstring "github.com/sandrolain/gosonata/pkg/ext/extstring"
+
+result, err := gosonata.Eval(`$camelCase("hello world")`, data,
+    gosonata.WithFunctions(extstring.AllEntries()...),
+)
+```
+
+### Category Helpers
+
+| Helper | Sub-package | Description |
+|--------|-------------|-------------|
+| `ext.WithAll()` | `pkg/ext` | All extensions (simple + advanced HOF) |
+| `ext.WithString()` | `extstring` | Extended string functions |
+| `ext.WithNumeric()` | `extnumeric` | Extended numeric/statistical functions |
+| `ext.WithArray()` | `extarray` | Extended array functions (incl. HOF) |
+| `ext.WithObject()` | `extobject` | Extended object functions (incl. HOF) |
+| `ext.WithTypes()` | `exttypes` | Type-predicate functions |
+| `ext.WithDateTime()` | `extdatetime` | Extended date/time functions |
+| `ext.WithCrypto()` | `extcrypto` | Cryptographic functions |
+| `ext.WithFormat()` | `extformat` | Data-format functions (CSV, template) |
+| `ext.WithFunctional()` | `extfunc` | Functional utilities (pipe, memoize) |
+
+### Function Reference
+
+#### `extstring` — Extended String Functions
+
+| JSONata name | Signature | Description |
+|---|---|---|
+| `$startsWith(str, prefix)` | `<s-s:b>` | `true` if `str` begins with `prefix` |
+| `$endsWith(str, suffix)` | `<s-s:b>` | `true` if `str` ends with `suffix` |
+| `$indexOf(str, search [, start])` | `<s-s-n?:n>` | First index of `search`, or `-1` |
+| `$lastIndexOf(str, search)` | `<s-s:n>` | Last index of `search`, or `-1` |
+| `$capitalize(str)` | `<s:s>` | Capitalizes first character |
+| `$titleCase(str)` | `<s:s>` | Title-cases every word |
+| `$camelCase(str)` | `<s:s>` | Converts to camelCase |
+| `$snakeCase(str)` | `<s:s>` | Converts to snake_case |
+| `$kebabCase(str)` | `<s:s>` | Converts to kebab-case |
+| `$repeat(str, n)` | `<s-n:s>` | Repeats `str` `n` times |
+| `$words(str)` | `<s:a<s>>` | Splits string into array of words |
+| `$template(tmpl, obj)` | `<s-o:s>` | Substitutes `{{key}}` placeholders from `obj` |
+
+#### `extnumeric` — Extended Numeric & Statistical Functions
+
+| JSONata name | Signature | Description |
+|---|---|---|
+| `$log(x [, base])` | `<n-n?:n>` | Logarithm; default base `e` |
+| `$sign(x)` | `<n:n>` | Returns `-1`, `0`, or `1` |
+| `$trunc(x)` | `<n:n>` | Truncates toward zero |
+| `$clamp(x, min, max)` | `<n-n-n:n>` | Clamps `x` to `[min, max]` |
+| `$sin(x)` | `<n:n>` | Sine (radians) |
+| `$cos(x)` | `<n:n>` | Cosine (radians) |
+| `$tan(x)` | `<n:n>` | Tangent (radians) |
+| `$asin(x)` | `<n:n>` | Arc-sine |
+| `$acos(x)` | `<n:n>` | Arc-cosine |
+| `$atan(x)` | `<n:n>` | Arc-tangent |
+| `$pi()` | `<:n>` | π constant |
+| `$median(array)` | `<a<n>:n>` | Median value |
+| `$variance(array)` | `<a<n>:n>` | Population variance |
+| `$stddev(array)` | `<a<n>:n>` | Population standard deviation |
+| `$percentile(array, p)` | `<a<n>-n:n>` | p-th percentile (0–100) |
+| `$mode(array)` | `<a<n>:n>` | Most frequent value |
+
+#### `extarray` — Extended Array Functions
+
+Simple functions:
+
+| JSONata name | Signature | Description |
+|---|---|---|
+| `$first(array)` | `<a:x>` | First element |
+| `$last(array)` | `<a:x>` | Last element |
+| `$take(array, n)` | `<a-n:a>` | First `n` elements |
+| `$skip(array, n)` | `<a-n:a>` | All elements after the first `n` |
+| `$slice(array, start [, end])` | `<a-n-n?:a>` | Sub-array (negative indices supported) |
+| `$flatten(array [, depth])` | `<a-n?:a>` | Flattens nested arrays to `depth` (default: full) |
+| `$chunk(array, size)` | `<a-n:a<a>>` | Splits into sub-arrays of `size` |
+| `$union(arr1, arr2)` | `<a-a:a>` | Set union (deduped) |
+| `$intersection(arr1, arr2)` | `<a-a:a>` | Set intersection |
+| `$difference(arr1, arr2)` | `<a-a:a>` | Elements in `arr1` not in `arr2` |
+| `$symmetricDifference(arr1, arr2)` | `<a-a:a>` | Elements in exactly one array |
+| `$range(start, end [, step])` | `<n-n-n?:a<n>>` | Numeric range array |
+| `$zipLongest(arr1, arr2, …)` | variadic | Zip, padding shorter arrays with `null` |
+| `$window(array, size [, step])` | `<a-n-n?:a<a>>` | Sliding-window sub-arrays |
+
+Advanced HOF (receive a key/comparator lambda):
+
+| JSONata name | Description |
+|---|---|
+| `$groupBy(array, fn)` | Groups elements by key returned by `fn(value)` |
+| `$countBy(array, fn)` | Counts elements per group key |
+| `$sumBy(array, fn)` | Sums numeric `fn(value)` per group key |
+| `$minBy(array, fn)` | Minimum `fn(value)` per group key |
+| `$maxBy(array, fn)` | Maximum `fn(value)` per group key |
+| `$accumulate(array, fn [, init])` | Running accumulation (returns all intermediate values) |
+
+#### `extobject` — Extended Object Functions
+
+Simple functions:
+
+| JSONata name | Signature | Description |
+|---|---|---|
+| `$values(obj)` | `<o:a>` | Array of object values |
+| `$pairs(obj)` | `<o:a<a>>` | Array of `[key, value]` pairs |
+| `$fromPairs(pairs)` | `<a<a>:o>` | Builds object from `[[k,v],…]` |
+| `$pick(obj, keys)` | `<o-a<s>:o>` | Keeps only the listed keys |
+| `$omit(obj, keys)` | `<o-a<s>:o>` | Drops the listed keys |
+| `$deepMerge(obj1, obj2)` | `<o-o:o>` | Recursive deep merge (right wins on conflict) |
+| `$invert(obj)` | `<o:o>` | Swaps keys and values |
+| `$size(obj)` | `<o:n>` | Number of own keys |
+| `$rename(obj, from, to)` | `<o-s-s:o>` | Renames a key |
+
+Advanced HOF:
+
+| JSONata name | Description |
+|---|---|
+| `$mapValues(obj, fn)` | Transforms each value with `fn(value, key)` |
+| `$mapKeys(obj, fn)` | Transforms each key with `fn(key, value)` |
+
+#### `exttypes` — Type Predicates
+
+| JSONata name | Signature | Description |
+|---|---|---|
+| `$isString(v)` | `<x:b>` | `true` if `v` is a string |
+| `$isNumber(v)` | `<x:b>` | `true` if `v` is a number |
+| `$isBoolean(v)` | `<x:b>` | `true` if `v` is a boolean |
+| `$isArray(v)` | `<x:b>` | `true` if `v` is an array |
+| `$isObject(v)` | `<x:b>` | `true` if `v` is an object |
+| `$isNull(v)` | `<x:b>` | `true` if `v` is JSON `null` |
+| `$isFunction(v)` | `<x:b>` | `true` if `v` is a function |
+| `$isUndefined(v)` | `<x:b>` | `true` if `v` is `undefined` |
+| `$isEmpty(v)` | `<x:b>` | `true` for `undefined`, `null`, `""`, `[]`, `{}` |
+| `$default(v, fallback)` | `<x-x:x>` | Returns `v` if non-empty, otherwise `fallback` |
+| `$identity(v)` | `<x:x>` | Returns `v` unchanged |
+
+#### `extdatetime` — Extended Date/Time Functions
+
+| JSONata name | Signature | Description |
+|---|---|---|
+| `$dateAdd(ts, amount, unit)` | `<s-n-s:s>` | Adds `amount` `unit` (year/month/day/hour/minute/second) to ISO timestamp |
+| `$dateDiff(ts1, ts2, unit)` | `<s-s-s:n>` | Difference between two ISO timestamps in `unit` |
+| `$dateComponents(ts)` | `<s:o>` | Decomposes ISO timestamp into `{year, month, day, hour, minute, second, ms, weekday, tz}` |
+| `$dateStartOf(ts, unit)` | `<s-s:s>` | Start of the `unit` period containing `ts` |
+| `$dateEndOf(ts, unit)` | `<s-s:s>` | End of the `unit` period containing `ts` |
+
+#### `extcrypto` — Cryptographic Functions
+
+| JSONata name | Signature | Description |
+|---|---|---|
+| `$uuid()` | `<:s>` | Generates a random UUID v4 |
+| `$hash(data, algo)` | `<s-s:s>` | Hashes `data` with `algo` (md5/sha1/sha256/sha512); hex output |
+| `$hmac(data, key, algo)` | `<s-s-s:s>` | HMAC of `data` with `key` and `algo`; hex output |
+
+#### `extformat` — Data Format Functions
+
+| JSONata name | Signature | Description |
+|---|---|---|
+| `$csv(text [, delimiter])` | `<s-s?:a<a>>` | Parses CSV text into array-of-arrays |
+| `$toCSV(array [, delimiter])` | `<a-s?:s>` | Serialises array-of-arrays to CSV text |
+| `$template(tmpl, obj)` | `<s-o:s>` | Go `text/template`-based substitution |
+
+#### `extfunc` — Functional Utilities
+
+| JSONata name | Description |
+|---|---|
+| `$pipe(value, fn1, fn2, …)` | Threads `value` through a sequence of functions |
+| `$memoize(fn)` | Returns a memoized version of `fn` (caches results by args) |
+
+### `AdvancedCustomFunctionDef`
+
+For extension functions that need to call back into the evaluator (e.g. to invoke a
+lambda argument passed by the caller), use `AdvancedCustomFunctionDef` instead of
+`CustomFunctionDef`:
+
+```go
+import "github.com/sandrolain/gosonata/pkg/functions"
+
+def := functions.AdvancedCustomFunctionDef{
+    Name:      "myHOF",
+    Signature: "<af:a>",
+    Fn: func(ctx context.Context, caller functions.Caller, args ...interface{}) (interface{}, error) {
+        arr := args[0].([]interface{})
+        fn  := args[1] // *Lambda or *FunctionDef
+        result := make([]interface{}, 0, len(arr))
+        for _, item := range arr {
+            v, err := caller.CallFunction(ctx, fn, item)
+            if err != nil {
+                return nil, err
+            }
+            result = append(result, v)
+        }
+        return result, nil
+    },
+}
+```
+
+Both `CustomFunctionDef` and `AdvancedCustomFunctionDef` implement `functions.FunctionEntry`
+and can be mixed in a single `gosonata.WithFunctions` call:
+
+```go
+gosonata.WithFunctions(
+    append(extstring.AllEntries(), extfunc.AllEntries()...)...,
+)
+```
 
 ---
 
