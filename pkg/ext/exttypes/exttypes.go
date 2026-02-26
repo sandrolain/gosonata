@@ -8,6 +8,7 @@ import (
 
 	"github.com/sandrolain/gosonata/pkg/ext/extutil"
 	"github.com/sandrolain/gosonata/pkg/functions"
+	"github.com/sandrolain/gosonata/pkg/types"
 )
 
 // All returns all extended type/control function definitions.
@@ -108,7 +109,11 @@ func IsNull() functions.CustomFunctionDef {
 		Name:      "isNull",
 		Signature: "<x:b>",
 		Fn: func(_ context.Context, args ...interface{}) (interface{}, error) {
-			return args[0] == nil, nil
+			if args[0] == nil {
+				return true, nil
+			}
+			_, isNull := args[0].(types.Null)
+			return isNull, nil
 		},
 	}
 }
