@@ -115,18 +115,16 @@ func (c *EvalContext) SetBinding(name string, value interface{}) {
 }
 
 // GetBinding retrieves a variable binding.
-// It searches the current context and parent contexts.
+// OPT-13: iterative walk up the parent chain instead of recursive calls.
+// This eliminates one Go stack frame per context level (common in deep paths).
 func (c *EvalContext) GetBinding(name string) (interface{}, bool) {
-	// Check current context
-	if value, ok := c.bindings[name]; ok {
-		return value, true
+	for node := c; node != nil; node = node.parent {
+		if node.bindings != nil {
+			if value, ok := node.bindings[name]; ok {
+				return value, true
+			}
+		}
 	}
-
-	// Check parent context
-	if c.parent != nil {
-		return c.parent.GetBinding(name)
-	}
-
 	return nil, false
 }
 

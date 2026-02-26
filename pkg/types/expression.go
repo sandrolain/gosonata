@@ -18,13 +18,19 @@ type Expression struct {
 	ast    *ASTNode
 	source string
 	errors []error
+	// arena backs all ASTNode values in the tree; keeping a reference here
+	// ensures the arena is not GC'd while the Expression (or a cache entry
+	// holding it) is still alive.  OPT-11.
+	arena *NodeArena
 }
 
 // NewExpression creates a new Expression from an AST.
-func NewExpression(ast *ASTNode, source string) *Expression {
+// arena may be nil when nodes were allocated individually (e.g. in tests).
+func NewExpression(ast *ASTNode, source string, arena *NodeArena) *Expression {
 	return &Expression{
 		ast:    ast,
 		source: source,
+		arena:  arena,
 	}
 }
 

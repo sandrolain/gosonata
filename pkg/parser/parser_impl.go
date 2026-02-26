@@ -18,6 +18,9 @@ type Parser struct {
 	prev    Token
 	errors  []error
 	opts    CompileOptions
+	// arena is the bump-pointer allocator for ASTNode values.
+	// OPT-11: eliminates one individual heap allocation per AST node.
+	arena *types.NodeArena
 }
 
 // NewParser creates a new parser for the given input string.
@@ -33,12 +36,19 @@ func NewParser(input string, opts ...CompileOption) *Parser {
 	p := &Parser{
 		lexer: NewLexer(input),
 		opts:  options,
+		arena: types.NewNodeArena(),
 	}
 
 	// Read the first token
 	p.advance()
 
 	return p
+}
+
+// newNode allocates an ASTNode from the parser's arena.
+// OPT-11: replaces types.NewASTNode to avoid per-node heap allocation.
+func (p *Parser) newNode(nodeType types.NodeType, position int) *types.ASTNode {
+	return p.arena.Alloc(nodeType, position)
 }
 
 // Parse parses the entire expression and returns the root AST node.
@@ -61,7 +71,7 @@ func (p *Parser) Parse() (*types.Expression, error) {
 		return nil, p.error("S0201", fmt.Sprintf("Unexpected token: %s", p.current.Value))
 	}
 
-	return types.NewExpression(node, p.lexer.input), nil
+	return types.NewExpression(node, p.lexer.input, p.arena), nil
 }
 
 // Operator precedence table (binding power)
@@ -373,7 +383,7 @@ func unescapeString(s string) (string, error) {
 
 // parseString parses a string literal.
 func (p *Parser) parseString() (*types.ASTNode, error) {
-	node := types.NewASTNode(types.NodeString, p.current.Position)
+	node := p.newNode(types.NodeString, p.current.Position)
 
 	// Process escape sequences
 	unescaped, err := unescapeString(p.current.Value)
@@ -388,7 +398,7 @@ func (p *Parser) parseString() (*types.ASTNode, error) {
 
 // parseNumber parses a number literal.
 func (p *Parser) parseNumber() (*types.ASTNode, error) {
-	node := types.NewASTNode(types.NodeNumber, p.current.Position)
+	node := p.newNode(types.NodeNumber, p.current.Position)
 
 	// Parse the number
 	val, err := strconv.ParseFloat(p.current.Value, 64)
@@ -403,7 +413,7 @@ func (p *Parser) parseNumber() (*types.ASTNode, error) {
 
 // parseBoolean parses a boolean literal.
 func (p *Parser) parseBoolean() (*types.ASTNode, error) {
-	node := types.NewASTNode(types.NodeBoolean, p.current.Position)
+	node := p.newNode(types.NodeBoolean, p.current.Position)
 	node.Value = p.current.Value == "true"
 	p.advance()
 	return node, nil
@@ -411,7 +421,7 @@ func (p *Parser) parseBoolean() (*types.ASTNode, error) {
 
 // parseNull parses a null literal.
 func (p *Parser) parseNull() (*types.ASTNode, error) {
-	node := types.NewASTNode(types.NodeNull, p.current.Position)
+	node := p.newNode(types.NodeNull, p.current.Position)
 	node.Value = types.NullValue
 	p.advance()
 	return node, nil
@@ -419,7 +429,7 @@ func (p *Parser) parseNull() (*types.ASTNode, error) {
 
 // parseName parses a field name.
 func (p *Parser) parseName() (*types.ASTNode, error) {
-	node := types.NewASTNode(types.NodeName, p.current.Position)
+	node := p.newNode(types.NodeName, p.current.Position)
 	node.Value = p.current.Value
 	p.advance()
 	return node, nil
@@ -428,7 +438,7 @@ func (p *Parser) parseName() (*types.ASTNode, error) {
 // parseNameFromKeyword treats a keyword token (and, or, in) as a field name.
 // This allows keywords to be used as identifiers in certain contexts.
 func (p *Parser) parseNameFromKeyword() (*types.ASTNode, error) {
-	node := types.NewASTNode(types.NodeName, p.current.Position)
+	node := p.newNode(types.NodeName, p.current.Position)
 	// Use the string representation of the keyword as the name
 	node.Value = p.current.Type.String()
 	p.advance()
@@ -437,7 +447,7 @@ func (p *Parser) parseNameFromKeyword() (*types.ASTNode, error) {
 
 // parseVariable parses a variable reference.
 func (p *Parser) parseVariable() (*types.ASTNode, error) {
-	node := types.NewASTNode(types.NodeVariable, p.current.Position)
+	node := p.newNode(types.NodeVariable, p.current.Position)
 	node.Value = p.current.Value // Empty string for $, or variable name
 	p.advance()
 	return node, nil
@@ -454,7 +464,7 @@ func (p *Parser) parseUnaryMinus() (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	node := types.NewASTNode(types.NodeUnary, pos)
+	node := p.newNode(types.NodeUnary, pos)
 	node.Value = "-"
 	node.LHS = expr
 
@@ -474,7 +484,7 @@ func (p *Parser) parseUnaryComparison() (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	node := types.NewASTNode(types.NodeUnary, pos)
+	node := p.newNode(types.NodeUnary, pos)
 	node.Value = op
 	node.LHS = expr
 
@@ -488,7 +498,7 @@ func (p *Parser) parseParent() (*types.ASTNode, error) {
 	pos := p.current.Position
 	p.advance() // Skip '%'
 
-	node := types.NewASTNode(types.NodeParent, pos)
+	node := p.newNode(types.NodeParent, pos)
 	node.Value = "%"
 
 	// Count consecutive % to allow %.% for grandparent, %.%.% for great-grandparent, etc.
@@ -507,7 +517,7 @@ func (p *Parser) parseGrouping() (*types.ASTNode, error) {
 
 	if p.current.Type == TokenParenClose {
 		// Empty grouping () represents empty sequence (undefined)
-		node := types.NewASTNode(types.NodeNull, p.current.Position)
+		node := p.newNode(types.NodeNull, p.current.Position)
 		node.Value = nil
 		p.advance()
 		return node, nil
@@ -544,7 +554,7 @@ func (p *Parser) parseGrouping() (*types.ASTNode, error) {
 		// Check if the expression is a bind (assignment) - if so, wrap in block
 		if exprs[0].Type == types.NodeBind {
 			// Wrap in block to create a new scope
-			blockNode := types.NewASTNode(types.NodeBlock, startPos)
+			blockNode := p.newNode(types.NodeBlock, startPos)
 			blockNode.Expressions = exprs
 			return blockNode, nil
 		}
@@ -553,7 +563,7 @@ func (p *Parser) parseGrouping() (*types.ASTNode, error) {
 	}
 
 	// Otherwise, wrap in a block node to establish a lexical scope
-	blockNode := types.NewASTNode(types.NodeBlock, startPos)
+	blockNode := p.newNode(types.NodeBlock, startPos)
 	blockNode.Expressions = exprs
 
 	return blockNode, nil
@@ -564,7 +574,7 @@ func (p *Parser) parseArrayConstructor() (*types.ASTNode, error) {
 	pos := p.current.Position
 	p.advance() // Skip '['
 
-	node := types.NewASTNode(types.NodeArray, pos)
+	node := p.newNode(types.NodeArray, pos)
 	node.Expressions = []*types.ASTNode{}
 
 	if p.current.Type == TokenBracketClose {
@@ -597,7 +607,7 @@ func (p *Parser) parseObjectConstructor() (*types.ASTNode, error) {
 	pos := p.current.Position
 	p.advance() // Skip '{'
 
-	node := types.NewASTNode(types.NodeObject, pos)
+	node := p.newNode(types.NodeObject, pos)
 	node.Expressions = []*types.ASTNode{}
 
 	if p.current.Type == TokenBraceClose {
@@ -623,7 +633,7 @@ func (p *Parser) parseObjectConstructor() (*types.ASTNode, error) {
 		}
 
 		// Create a pair node (we use a binary node with special marker)
-		pair := types.NewASTNode(types.NodeBinary, key.Position)
+		pair := p.newNode(types.NodeBinary, key.Position)
 		pair.Value = ":"
 		pair.LHS = key
 		pair.RHS = value
@@ -666,7 +676,7 @@ func (p *Parser) parsePath(left *types.ASTNode) (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	node := types.NewASTNode(types.NodePath, pos)
+	node := p.newNode(types.NodePath, pos)
 	node.LHS = left
 	node.RHS = right
 
@@ -712,7 +722,7 @@ func (p *Parser) parseContextBind(left *types.ASTNode) (*types.ASTNode, error) {
 		return nil, p.error(types.ErrContextAfterSort, "a context variable binding must precede the 'order-by' clause on a step")
 	}
 
-	node := types.NewASTNode(types.NodeContext, pos)
+	node := p.newNode(types.NodeContext, pos)
 	node.LHS = left
 	node.RHS = rhs
 	return node, nil
@@ -735,7 +745,7 @@ func (p *Parser) parseIndexBind(left *types.ASTNode) (*types.ASTNode, error) {
 		return nil, p.error(types.ErrContextVarIllegal, "The '#' operator requires a variable binding (e.g. #$var)")
 	}
 
-	node := types.NewASTNode(types.NodeIndex, pos)
+	node := p.newNode(types.NodeIndex, pos)
 	node.LHS = left
 	node.RHS = rhs
 	return node, nil
@@ -757,7 +767,7 @@ func (p *Parser) parseDescendent(left *types.ASTNode) (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	node := types.NewASTNode(types.NodeDescendant, pos)
+	node := p.newNode(types.NodeDescendant, pos)
 	node.LHS = left
 	node.RHS = right
 
@@ -781,7 +791,7 @@ func (p *Parser) parseDescendentPrefix() (*types.ASTNode, error) {
 	}
 
 	// Create implicit current context reference ($)
-	left := types.NewASTNode(types.NodeVariable, pos)
+	left := p.newNode(types.NodeVariable, pos)
 	left.Value = ""
 
 	// If there's a right-hand side, parse it
@@ -804,7 +814,7 @@ func (p *Parser) parseDescendentPrefix() (*types.ASTNode, error) {
 		}
 	}
 
-	node := types.NewASTNode(types.NodeDescendant, pos)
+	node := p.newNode(types.NodeDescendant, pos)
 	node.LHS = left
 	node.RHS = right
 
@@ -817,13 +827,13 @@ func (p *Parser) parseWildcard() (*types.ASTNode, error) {
 	pos := p.current.Position
 	p.advance() // Skip '*'
 
-	node := types.NewASTNode(types.NodeWildcard, pos)
+	node := p.newNode(types.NodeWildcard, pos)
 	return node, nil
 }
 
 // parseRegex parses a regular expression literal.
 func (p *Parser) parseRegex() (*types.ASTNode, error) {
-	node := types.NewASTNode(types.NodeRegex, p.current.Position)
+	node := p.newNode(types.NodeRegex, p.current.Position)
 	node.Value = p.current.Value // Pattern with flags already converted by lexer
 	p.advance()
 	return node, nil
@@ -838,7 +848,7 @@ func (p *Parser) parseFilter(left *types.ASTNode) (*types.ASTNode, error) {
 	if p.current.Type == TokenBracketClose {
 		p.advance() // Skip ']'
 		// Empty filter means "return all items" - use NodeFilter with nil RHS
-		node := types.NewASTNode(types.NodeFilter, pos)
+		node := p.newNode(types.NodeFilter, pos)
 		node.LHS = left
 		node.RHS = nil        // nil filter means "return all"
 		node.KeepArray = true // Preserve array structure through path evaluation
@@ -855,7 +865,7 @@ func (p *Parser) parseFilter(left *types.ASTNode) (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	node := types.NewASTNode(types.NodeFilter, pos)
+	node := p.newNode(types.NodeFilter, pos)
 	node.LHS = left
 	node.RHS = filter
 
@@ -874,7 +884,7 @@ func (p *Parser) parseBinaryOp(left *types.ASTNode) (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	node := types.NewASTNode(types.NodeBinary, op.Position)
+	node := p.newNode(types.NodeBinary, op.Position)
 	node.Value = operatorString(op.Type)
 	node.LHS = left
 	node.RHS = right
@@ -888,7 +898,7 @@ func (p *Parser) parseFunctionCall(nameNode *types.ASTNode) (*types.ASTNode, err
 	pos := p.current.Position
 	p.advance() // Skip '('
 
-	node := types.NewASTNode(types.NodeFunction, pos)
+	node := p.newNode(types.NodeFunction, pos)
 
 	// For all expressions (lambda, variable, function-result, name, etc.), use LHS.
 	// Note: bare names like string(2) should NOT resolve to built-ins — only $string(2) does.
@@ -904,7 +914,7 @@ func (p *Parser) parseFunctionCall(nameNode *types.ASTNode) (*types.ASTNode, err
 			// Check for placeholder ? in argument position
 			if p.current.Type == TokenCondition {
 				// '?' is a placeholder in function argument context
-				placeholder := types.NewASTNode(types.NodePlaceholder, p.current.Position)
+				placeholder := p.newNode(types.NodePlaceholder, p.current.Position)
 				node.Arguments = append(node.Arguments, placeholder)
 				hasPlaceholder = true
 				p.advance() // Skip '?'
@@ -951,7 +961,7 @@ func (p *Parser) parseConditional(condition *types.ASTNode) (*types.ASTNode, err
 		return nil, err
 	}
 
-	node := types.NewASTNode(types.NodeCondition, pos)
+	node := p.newNode(types.NodeCondition, pos)
 	node.LHS = condition // Condition
 	node.RHS = thenExpr  // Then branch
 
@@ -979,7 +989,7 @@ func (p *Parser) parseLambda() (*types.ASTNode, error) {
 	pos := p.current.Position
 	p.advance() // Skip 'function' keyword
 
-	node := types.NewASTNode(types.NodeLambda, pos)
+	node := p.newNode(types.NodeLambda, pos)
 	node.Arguments = []*types.ASTNode{} // Parameters
 
 	// Expect '('
@@ -994,7 +1004,7 @@ func (p *Parser) parseLambda() (*types.ASTNode, error) {
 				return nil, p.error("S0201", "Expected variable in lambda parameter list")
 			}
 
-			param := types.NewASTNode(types.NodeVariable, p.current.Position)
+			param := p.newNode(types.NodeVariable, p.current.Position)
 			param.Value = p.current.Value
 			node.Arguments = append(node.Arguments, param)
 			p.advance()
@@ -1082,7 +1092,7 @@ func (p *Parser) parseRange(left *types.ASTNode) (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	node := types.NewASTNode(types.NodeBinary, pos)
+	node := p.newNode(types.NodeBinary, pos)
 	node.Value = ".."
 	node.LHS = left
 	node.RHS = right
@@ -1103,7 +1113,7 @@ func (p *Parser) parseApply(left *types.ASTNode) (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	node := types.NewASTNode(types.NodeBinary, pos)
+	node := p.newNode(types.NodeBinary, pos)
 	node.Value = "~>"
 	node.LHS = left
 	node.RHS = right
@@ -1147,7 +1157,7 @@ func (p *Parser) parseSort(left *types.ASTNode) (*types.ASTNode, error) {
 	p.advance() // Skip ')'
 
 	// Create a NodeSort node with left expression and sort key(s)
-	node := types.NewASTNode(types.NodeSort, pos)
+	node := p.newNode(types.NodeSort, pos)
 	node.LHS = left // The sequence to sort
 	node.Value = "^"
 
@@ -1180,7 +1190,7 @@ func (p *Parser) parseAssignment(left *types.ASTNode) (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	node := types.NewASTNode(types.NodeBind, pos)
+	node := p.newNode(types.NodeBind, pos)
 	node.Value = left.Value // Variable name
 	node.LHS = left         // Variable node
 	node.RHS = right        // Value expression
@@ -1257,7 +1267,7 @@ func (p *Parser) parseTransform() (*types.ASTNode, error) {
 		return nil, err
 	}
 
-	node := types.NewASTNode(types.NodeTransform, pos)
+	node := p.newNode(types.NodeTransform, pos)
 	node.LHS = path   // path expression
 	node.RHS = update // update expression
 

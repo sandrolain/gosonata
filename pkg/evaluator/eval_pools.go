@@ -127,3 +127,49 @@ func releaseEvalCtx(c *EvalContext) {
 	c.nowTime = nil
 	evalCtxPool.Put(c)
 }
+
+// hofArgsFrame is a fixed-size backing array for HOF iteration argument slices.
+// Using a struct avoids heap-allocating a new []interface{} on every $map/$filter/$reduce
+// iteration. The pool is safe because callHOFFn only reads elements (binding values to
+// lambda params or passing to built-in functions); it never stores the slice itself.
+// After callHOFFn returns, the caller clears element references and returns the frame.
+//
+// THREAD-SAFETY AUDIT: safe.
+//   - sync.Pool is designed for concurrent use.
+//   - Each caller holds exclusive ownership of the frame for the duration of one
+//     callHOFFn call; the frame is never shared between goroutines.
+type hofArgsFrame struct {
+	s [4]interface{}
+}
+
+var hofArgsPool = sync.Pool{
+	New: func() interface{} { return new(hofArgsFrame) },
+}
+
+// acquireHOFArgs3 returns a pooled 3-element slice for HOF calls ($map, $filter, $single).
+func acquireHOFArgs3(a, b, c interface{}) (*hofArgsFrame, []interface{}) {
+	f := hofArgsPool.Get().(*hofArgsFrame)
+	f.s[0] = a
+	f.s[1] = b
+	f.s[2] = c
+	return f, f.s[:3]
+}
+
+// acquireHOFArgs4 returns a pooled 4-element slice for HOF calls ($reduce).
+func acquireHOFArgs4(a, b, c, d interface{}) (*hofArgsFrame, []interface{}) {
+	f := hofArgsPool.Get().(*hofArgsFrame)
+	f.s[0] = a
+	f.s[1] = b
+	f.s[2] = c
+	f.s[3] = d
+	return f, f.s[:4]
+}
+
+// releaseHOFArgs clears element references and returns the frame to the pool.
+func releaseHOFArgs(f *hofArgsFrame) {
+	f.s[0] = nil
+	f.s[1] = nil
+	f.s[2] = nil
+	f.s[3] = nil
+	hofArgsPool.Put(f)
+}

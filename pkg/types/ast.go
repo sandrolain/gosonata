@@ -89,11 +89,66 @@ type ASTNode struct {
 }
 
 // NewASTNode creates a new AST node of the specified type.
+// Prefer NodeArena.Alloc when parsing to reduce per-node heap allocations.
 func NewASTNode(nodeType NodeType, position int) *ASTNode {
 	return &ASTNode{
 		Type:     nodeType,
 		Position: position,
 	}
+}
+
+// arenaChunkSize is the number of ASTNode values pre-allocated per arena chunk.
+// 64 nodes ≈ 12-13 KB; most JSONata expressions fit in a single chunk.
+const arenaChunkSize = 64
+
+// NodeArena is a bump-pointer allocator for ASTNode values.
+//
+// Instead of allocating each node individually on the heap (one GC-tracked
+// object per node), the arena pre-allocates fixed-size chunks of ASTNode
+// structs and returns pointers into them. A typical expression (< 64 nodes)
+// requires only a single chunk allocation, reducing parse-time allocations
+// by roughly N-1 where N is the node count.
+//
+// # Lifetime
+//
+// The arena MUST stay alive as long as any pointer returned by Alloc is
+// reachable. Attaching the arena to the [Expression] achieves this: the GC
+// collects the arena (and all its chunks) automatically when the Expression
+// is released — including when it is evicted from the LRU cache.
+//
+// # Thread safety
+//
+// NodeArena is NOT thread-safe. Each [Parser] owns its own arena and the
+// arena is never shared across goroutines.
+type NodeArena struct {
+	chunks [][]ASTNode
+	pos    int // next free index in the last chunk
+}
+
+// NewNodeArena allocates an arena pre-warmed with one initial chunk.
+func NewNodeArena() *NodeArena {
+	return &NodeArena{
+		chunks: [][]ASTNode{make([]ASTNode, arenaChunkSize)},
+		pos:    0,
+	}
+}
+
+// Alloc returns a pointer to a zero-valued ASTNode inside the arena,
+// with Type and Position set. All other fields remain at their zero values
+// (nil pointers, empty slices, false booleans) and must be filled by the caller.
+func (a *NodeArena) Alloc(nodeType NodeType, position int) *ASTNode {
+	if a.pos >= arenaChunkSize {
+		// Current chunk exhausted — allocate a new one.
+		a.chunks = append(a.chunks, make([]ASTNode, arenaChunkSize))
+		a.pos = 0
+	}
+	n := &a.chunks[len(a.chunks)-1][a.pos]
+	a.pos++
+	// Zero-init the node (re-use of pool'd memory is safe because chunks are
+	// freshly make()'d and pos advances monotonically; nodes are never recycled).
+	n.Type = nodeType
+	n.Position = position
+	return n
 }
 
 // String returns a string representation of the node type.

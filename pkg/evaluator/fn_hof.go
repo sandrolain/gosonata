@@ -48,7 +48,11 @@ func fnMap(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []inter
 
 	result := make([]interface{}, 0, len(arr))
 	for i, item := range arr {
-		value, err := e.callHOFFn(ctx, evalCtx, args[1], []interface{}{item, float64(i), arr})
+		// OPT-14: use pooled HOF args frame to avoid a []interface{}{...} allocation
+		// per iteration. Safe: callHOFFn only reads elements; it never stores the slice.
+		f, hofArgs := acquireHOFArgs3(item, float64(i), arr)
+		value, err := e.callHOFFn(ctx, evalCtx, args[1], hofArgs)
+		releaseHOFArgs(f)
 		if err != nil {
 			return nil, err
 		}
@@ -81,7 +85,10 @@ func fnFilter(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 
 	result := make([]interface{}, 0)
 	for i, item := range arr {
-		value, err := e.callHOFFn(ctx, evalCtx, args[1], []interface{}{item, float64(i), arr})
+		// OPT-14: pooled HOF args frame
+		f, hofArgs := acquireHOFArgs3(item, float64(i), arr)
+		value, err := e.callHOFFn(ctx, evalCtx, args[1], hofArgs)
+		releaseHOFArgs(f)
 		if err != nil {
 			return nil, err
 		}
@@ -145,7 +152,10 @@ func fnReduce(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 	}
 
 	for i := startIdx; i < len(arr); i++ {
-		value, err := e.callHOFFn(ctx, evalCtx, args[1], []interface{}{accumulator, arr[i], float64(i), arr})
+		// OPT-14: pooled HOF args frame (4 elements: accumulator, current, index, array)
+		f, hofArgs := acquireHOFArgs4(accumulator, arr[i], float64(i), arr)
+		value, err := e.callHOFFn(ctx, evalCtx, args[1], hofArgs)
+		releaseHOFArgs(f)
 		if err != nil {
 			return nil, err
 		}
@@ -178,7 +188,10 @@ func fnSingle(ctx context.Context, e *Evaluator, evalCtx *EvalContext, args []in
 	for i, entry := range arr {
 		positiveResult := true
 		if fn != nil {
-			res, err := e.callHOFFn(ctx, evalCtx, fn, []interface{}{entry, float64(i), arr})
+			// OPT-14: pooled HOF args frame
+			hf, hofArgs := acquireHOFArgs3(entry, float64(i), arr)
+			res, err := e.callHOFFn(ctx, evalCtx, fn, hofArgs)
+			releaseHOFArgs(hf)
 			if err != nil {
 				return nil, err
 			}
