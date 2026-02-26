@@ -2,10 +2,10 @@ package evaluator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/sandrolain/gosonata/pkg/types"
@@ -97,11 +97,11 @@ func distinctCanonicalKey(v interface{}) string {
 		}
 		return "bf"
 	case float64:
-		b, _ := json.Marshal(val)
-		return "f" + string(b)
+		// Fast-path: evita json.Marshal usando strconv, zero allocazioni aggiuntive
+		return "f" + strconv.FormatFloat(val, 'f', -1, 64)
 	case string:
-		b, _ := json.Marshal(val)
-		return "s" + string(b)
+		// Fast-path: il prefisso "s" garantisce unicità di tipo; il valore grezzo è canonico
+		return "s" + val
 	case *OrderedObject:
 		// Sort keys for canonical comparison
 		keys := make([]string, len(val.Keys))
@@ -113,8 +113,8 @@ func distinctCanonicalKey(v interface{}) string {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			kb, _ := json.Marshal(k)
-			buf.Write(kb)
+			// strconv.Quote produce la stessa forma quoted+escaped di json.Marshal per le stringhe
+			buf.WriteString(strconv.Quote(k))
 			buf.WriteByte(':')
 			buf.WriteString(distinctCanonicalKey(val.Values[k]))
 		}
@@ -132,8 +132,7 @@ func distinctCanonicalKey(v interface{}) string {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			kb, _ := json.Marshal(k)
-			buf.Write(kb)
+			buf.WriteString(strconv.Quote(k))
 			buf.WriteByte(':')
 			buf.WriteString(distinctCanonicalKey(val[k]))
 		}
