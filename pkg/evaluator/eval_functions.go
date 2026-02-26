@@ -11,9 +11,10 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 	// Check if this is a lambda/variable call (LHS contains lambda or variable) or built-in function call (Value contains name)
 	if node.LHS != nil {
 		// Lambda or variable call: evaluate first, then call it.
-		// Arguments must NOT themselves be in tail position.
-		callCtx := withoutTCOTail(ctx)
-		callableValue, err := e.evalNode(callCtx, node.LHS, evalCtx)
+		// OPT-01: save/clear tcoTail for callable+arg evaluation, restore before TCO check.
+		prevTCO := evalCtx.tcoTail
+		evalCtx.tcoTail = false
+		callableValue, err := e.evalNode(ctx, node.LHS, evalCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -22,10 +23,10 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 		switch fn := callableValue.(type) {
 		case *Lambda:
 			// User-defined lambda
-			// Evaluate arguments (never in tail position)
+			// Evaluate arguments (never in tail position; tcoTail is already false)
 			args := make([]interface{}, 0, len(node.Arguments))
 			for _, argNode := range node.Arguments {
-				arg, err := e.evalNode(callCtx, argNode, evalCtx)
+				arg, err := e.evalNode(ctx, argNode, evalCtx)
 				if err != nil {
 					return nil, err
 				}
@@ -34,10 +35,13 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 				args = append(args, arg)
 			}
 
+			// Restore TCO flag before checking tail position.
+			evalCtx.tcoTail = prevTCO
+
 			// TCO: if we are in tail position, apply signature validation and return a
 			// thunk instead of recursing. The callLambda trampoline will re-execute the
 			// body without growing the stack.
-			if isTCOTail(ctx) {
+			if evalCtx.tcoTail {
 				// Apply full signature validation (including auto-wrapping) before thunk.
 				if err2 := e.validateAndAdaptLambdaArgs(fn, args); err2 != nil {
 					return nil, err2
@@ -50,10 +54,10 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 
 		case *FunctionDef:
 			// Built-in function (from variable like $not)
-			// Evaluate arguments
+			// Evaluate arguments (evalCtx.tcoTail is already false here)
 			args := make([]interface{}, 0, len(node.Arguments))
 			for _, argNode := range node.Arguments {
-				arg, err := e.evalNode(callCtx, argNode, evalCtx)
+				arg, err := e.evalNode(ctx, argNode, evalCtx)
 				if err != nil {
 					return nil, err
 				}
@@ -92,7 +96,7 @@ func (e *Evaluator) evalFunction(ctx context.Context, node *types.ASTNode, evalC
 					if fnDef, found := e.getCustomFunction(varName); found {
 						args := make([]interface{}, 0, len(node.Arguments))
 						for _, argNode := range node.Arguments {
-							arg, err := e.evalNode(callCtx, argNode, evalCtx)
+							arg, err := e.evalNode(ctx, argNode, evalCtx)
 							if err != nil {
 								return nil, err
 							}

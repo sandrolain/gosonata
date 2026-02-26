@@ -53,21 +53,25 @@ func New(capacity int) *Cache {
 func (c *Cache) Get(key string) (*types.Expression, bool) {
 	c.mu.RLock()
 	el, ok := c.items[key]
+	// OPT-08: if the element is already at the front, skip the write lock entirely.
+	alreadyFront := ok && c.ll.Front() == el
 	c.mu.RUnlock()
 	if !ok {
 		return nil, false
 	}
 
-	// Promote to front under write lock; re-check in case of concurrent eviction.
-	c.mu.Lock()
-	el, ok = c.items[key]
-	if ok {
-		c.ll.MoveToFront(el)
-	}
-	c.mu.Unlock()
+	if !alreadyFront {
+		// Promote to front under write lock; re-check in case of concurrent eviction.
+		c.mu.Lock()
+		el, ok = c.items[key]
+		if ok {
+			c.ll.MoveToFront(el)
+		}
+		c.mu.Unlock()
 
-	if !ok {
-		return nil, false
+		if !ok {
+			return nil, false
+		}
 	}
 	return el.Value.(*entry).expr, true
 }

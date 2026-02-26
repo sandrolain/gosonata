@@ -26,6 +26,11 @@ type EvalContext struct {
 	// Only contexts created this way are valid targets for the % (parent) operator.
 	isArrayItem bool
 
+	// tcoTail marks that the current evaluation is in TCO tail position.
+	// OPT-01: stored here instead of context.Context to avoid a context.WithValue
+	// allocation on every binary operator evaluation.
+	tcoTail bool
+
 	// nowTime caches the current time for the duration of a single evaluation.
 	// It is stored only on the root context and lazily initialised on first use.
 	// This makes $now() / $millis() consistent within one expression while

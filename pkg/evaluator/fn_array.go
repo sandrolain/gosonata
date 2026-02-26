@@ -108,6 +108,8 @@ func distinctCanonicalKey(v interface{}) string {
 		copy(keys, val.Keys)
 		sort.Strings(keys)
 		var buf strings.Builder
+		// OPT-10: pre-size the builder — 2 for braces + estimate per key
+		buf.Grow(2 + len(val.Keys)*16)
 		buf.WriteString("o{")
 		for i, k := range keys {
 			if i > 0 {
@@ -127,6 +129,8 @@ func distinctCanonicalKey(v interface{}) string {
 		}
 		sort.Strings(keys)
 		var buf strings.Builder
+		// OPT-10: pre-size the builder
+		buf.Grow(2 + len(val)*16)
 		buf.WriteString("o{")
 		for i, k := range keys {
 			if i > 0 {
@@ -140,6 +144,8 @@ func distinctCanonicalKey(v interface{}) string {
 		return buf.String()
 	case []interface{}:
 		var buf strings.Builder
+		// OPT-10: pre-size the builder
+		buf.Grow(2 + len(val)*8)
 		buf.WriteString("a[")
 		for i, item := range val {
 			if i > 0 {

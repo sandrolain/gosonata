@@ -13,9 +13,13 @@ import (
 func (e *Evaluator) evalBinary(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
 	op := node.Value.(string)
 
-	// Binary operations are never in tail position for their operands.
-	// Remove TCO tail flag to prevent incorrect tail-call optimization of sub-expressions.
-	ctx = withoutTCOTail(ctx)
+	// OPT-01: Binary operands are never in tail position. Clear the TCO flag on the shared
+	// EvalContext (cheap bool field write) instead of wrapping context with context.WithValue.
+	// Restore on return so callers that checked tcoTail before dispatching here still see
+	// the original value (e.g. a block whose last expr is a binary op).
+	prevTCO := evalCtx.tcoTail
+	evalCtx.tcoTail = false
+	defer func() { evalCtx.tcoTail = prevTCO }()
 
 	// Handle special operators
 	switch op {

@@ -2,7 +2,6 @@ package evaluator
 
 import (
 	"context"
-	"reflect"
 
 	"github.com/sandrolain/gosonata/pkg/types"
 )
@@ -423,79 +422,71 @@ func deduplicateResults(results []interface{}) []interface{} {
 }
 
 // isComplexType returns true if the value is a map or slice (complex types that should be deduplicated).
-
+// OPT-04: type switch avoids reflect.ValueOf allocation for the common runtime types.
 func isComplexType(v interface{}) bool {
-	if v == nil {
-		return false
+	switch v.(type) {
+	case []interface{}, map[string]interface{}, *OrderedObject:
+		return true
 	}
-	val := reflect.ValueOf(v)
-	kind := val.Kind()
-	return kind == reflect.Map || kind == reflect.Slice || kind == reflect.Array
+	return false
 }
 
 // deepEqual performs deep equality comparison between two values.
 // Handles maps, slices, and primitive types.
-
+// OPT-04: type switch avoids reflect.ValueOf allocation; covers all runtime types
+// produced by encoding/json and the evaluator itself.
 func deepEqual(a, b interface{}) bool {
-	if a == nil && b == nil {
-		return true
+	if a == nil {
+		return b == nil
 	}
-	if a == nil || b == nil {
-		return false
-	}
-
-	// Use reflection for all comparisons
-	aVal := reflect.ValueOf(a)
-	bVal := reflect.ValueOf(b)
-
-	// Different types are not equal
-	if aVal.Type() != bVal.Type() {
-		return false
-	}
-
-	switch aVal.Kind() {
-	case reflect.Map:
-		if aVal.Len() != bVal.Len() {
+	switch av := a.(type) {
+	case bool:
+		bv, ok := b.(bool)
+		return ok && av == bv
+	case float64:
+		bv, ok := b.(float64)
+		return ok && av == bv
+	case string:
+		bv, ok := b.(string)
+		return ok && av == bv
+	case types.Null:
+		_, ok := b.(types.Null)
+		return ok
+	case []interface{}:
+		bv, ok := b.([]interface{})
+		if !ok || len(av) != len(bv) {
 			return false
 		}
-		for _, key := range aVal.MapKeys() {
-			aElem := aVal.MapIndex(key)
-			bElem := bVal.MapIndex(key)
-			if !bElem.IsValid() || !deepEqual(aElem.Interface(), bElem.Interface()) {
+		for i := range av {
+			if !deepEqual(av[i], bv[i]) {
 				return false
 			}
 		}
 		return true
-
-	case reflect.Slice, reflect.Array:
-		if aVal.Len() != bVal.Len() {
+	case map[string]interface{}:
+		bv, ok := b.(map[string]interface{})
+		if !ok || len(av) != len(bv) {
 			return false
 		}
-		for i := 0; i < aVal.Len(); i++ {
-			if !deepEqual(aVal.Index(i).Interface(), bVal.Index(i).Interface()) {
+		for k, v := range av {
+			if !deepEqual(v, bv[k]) {
 				return false
 			}
 		}
 		return true
-
-	case reflect.String:
-		return aVal.String() == bVal.String()
-
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return aVal.Int() == bVal.Int()
-
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return aVal.Uint() == bVal.Uint()
-
-	case reflect.Float32, reflect.Float64:
-		return aVal.Float() == bVal.Float()
-
-	case reflect.Bool:
-		return aVal.Bool() == bVal.Bool()
-
+	case *OrderedObject:
+		bv, ok := b.(*OrderedObject)
+		if !ok || len(av.Keys) != len(bv.Keys) {
+			return false
+		}
+		for _, k := range av.Keys {
+			if !deepEqual(av.Values[k], bv.Values[k]) {
+				return false
+			}
+		}
+		return true
 	default:
-		// For other types, use DeepEqual from reflect package
-		return reflect.DeepEqual(a, b)
+		return false
 	}
 }
 

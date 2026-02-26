@@ -208,12 +208,26 @@ func (e *Evaluator) toString(value interface{}) string {
 		}
 		return "false"
 	default:
-		// Arrays, objects, and other types: serialize as JSON
-		b, err := json.Marshal(value)
-		if err != nil {
+		// Arrays, objects, and other types: serialize as JSON.
+		// OPT-06: use a pooled bytes.Buffer + json.Encoder to avoid the two
+		// separate allocations that json.Marshal does (internal buffer + string copy).
+		// SetEscapeHTML(false) matches JavaScript JSON.stringify behaviour,
+		// which does NOT escape '<', '>' or '&'.
+		buf := acquireBuf()
+		enc := json.NewEncoder(buf)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(value); err != nil {
+			releaseBuf(buf)
 			return fmt.Sprintf("%v", value)
 		}
-		return string(b)
+		// json.Encoder.Encode always appends a trailing '\n'; strip it.
+		b := buf.Bytes()
+		if len(b) > 0 && b[len(b)-1] == '\n' {
+			b = b[:len(b)-1]
+		}
+		s := string(b)
+		releaseBuf(buf)
+		return s
 	}
 }
 
@@ -228,6 +242,20 @@ func (e *Evaluator) roundNumberForJSON(v float64) float64 {
 	return rounded
 }
 
+// removeExponentLeadingZero removes the single leading zero that strconv.FormatFloat
+// adds to the exponent for 1-digit exponents (e.g. "1e-07" → "1e-7", "1e+07" → "1e+7").
+// It performs a single linear scan instead of four strings.ReplaceAll calls. (OPT-07)
+func removeExponentLeadingZero(s string) string {
+	for i := 0; i < len(s)-2; i++ {
+		if (s[i] == 'e' || s[i] == 'E') &&
+			(s[i+1] == '+' || s[i+1] == '-') &&
+			s[i+2] == '0' {
+			return s[:i+2] + s[i+3:]
+		}
+	}
+	return s
+}
+
 // formatNumberForString formats numbers with JSONata's exponent rules.
 
 func (e *Evaluator) formatNumberForString(v float64) string {
@@ -235,11 +263,9 @@ func (e *Evaluator) formatNumberForString(v float64) string {
 	abs := math.Abs(rounded)
 	if abs != 0 && (abs < 1e-6 || abs >= 1e21) {
 		str := strconv.FormatFloat(rounded, 'g', -1, 64)
-		// Remove leading zero from exponent: 1e-07 → 1e-7
-		str = strings.ReplaceAll(str, "e-0", "e-")
-		str = strings.ReplaceAll(str, "e+0", "e+")
-		str = strings.ReplaceAll(str, "E-0", "E-")
-		str = strings.ReplaceAll(str, "E+0", "E+")
+		// OPT-07: single-pass removal of leading zero from exponent (e.g. 1e-07 → 1e-7)
+		// strconv.FormatFloat with 'g' produces at most one leading zero in the exponent.
+		str = removeExponentLeadingZero(str)
 		return str
 	}
 

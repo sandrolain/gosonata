@@ -3,11 +3,35 @@ package evaluator
 import (
 	"context"
 	"fmt"
+
 	"github.com/sandrolain/gosonata/pkg/types"
 )
 
 func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	// Check context cancellation
+	if node == nil {
+		return nil, nil
+	}
+
+	// OPT-09: leaf nodes (literals, lambda, regex) cannot recurse infinitely.
+	// Skip the cancellation check and depth tracking on the hot path.
+	switch node.Type {
+	case types.NodeString:
+		return e.evalString(node)
+	case types.NodeNumber:
+		return e.evalNumber(node)
+	case "value": // NodeBoolean or NodeNull
+		return node.Value, nil
+	case types.NodeRegex:
+		return e.evalRegex(node)
+	case types.NodeLambda:
+		return e.evalLambda(node, evalCtx)
+	case types.NodeName:
+		return e.evalName(node, evalCtx)
+	case types.NodeVariable:
+		return e.evalVariable(node, evalCtx)
+	}
+
+	// Check context cancellation for nodes that can recurse.
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -26,10 +50,6 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 		defer func() { *p-- }()
 	}
 
-	if node == nil {
-		return nil, nil
-	}
-
 	// Debug logging
 	if e.opts.Debug {
 		e.logger.Debug("evaluating node",
@@ -40,26 +60,12 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 
 	// Dispatch based on node type
 	switch node.Type {
-	case types.NodeString:
-		return e.evalString(node)
-	case types.NodeNumber:
-		return e.evalNumber(node)
-	case "value": // NodeBoolean or NodeNull
-		// Keep types.Null as-is during evaluation
-		// Will be converted to nil at final return
-		return node.Value, nil
-	case types.NodeName:
-		return e.evalName(node, evalCtx)
-	case types.NodeVariable:
-		return e.evalVariable(node, evalCtx)
 	case types.NodePath:
 		return e.evalPath(ctx, node, evalCtx)
 	case types.NodeDescendant:
 		return e.evalDescendent(ctx, node, evalCtx)
 	case types.NodeWildcard:
 		return e.evalWildcard(ctx, node, evalCtx)
-	case types.NodeRegex:
-		return e.evalRegex(node)
 	case types.NodeBinary:
 		return e.evalBinary(ctx, node, evalCtx)
 	case types.NodeUnary:
@@ -76,8 +82,6 @@ func (e *Evaluator) evalNode(ctx context.Context, node *types.ASTNode, evalCtx *
 		return e.evalFunction(ctx, node, evalCtx)
 	case types.NodePartial:
 		return e.evalPartial(ctx, node, evalCtx)
-	case types.NodeLambda:
-		return e.evalLambda(node, evalCtx)
 	case types.NodeBind:
 		return e.evalBind(ctx, node, evalCtx)
 	case types.NodeBlock:

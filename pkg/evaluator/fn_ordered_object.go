@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"encoding/json"
+	"strconv"
 )
 
 type OrderedObject struct {
@@ -26,11 +27,8 @@ func (o *OrderedObject) MarshalJSON() ([]byte, error) {
 		if i > 0 {
 			buf.WriteByte(',')
 		}
-		keyBytes, err := json.Marshal(key)
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(keyBytes)
+		// OPT-05: strconv.Quote è equivalente a json.Marshal per le stringhe e non alloca []byte+error
+		buf.WriteString(strconv.Quote(key))
 		buf.WriteByte(':')
 		valueBytes, err := json.Marshal(o.Values[key])
 		if err != nil {

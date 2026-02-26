@@ -185,14 +185,19 @@ func (e *Evaluator) evalFilter(ctx context.Context, node *types.ASTNode, evalCtx
 // evalCondition evaluates a conditional expression.
 
 func (e *Evaluator) evalCondition(ctx context.Context, node *types.ASTNode, evalCtx *EvalContext) (interface{}, error) {
-	// Condition must NOT be in tail position - only branches can be tail.
-	condCtx := withoutTCOTail(ctx)
+	// OPT-01: Condition must NOT be in tail position - only branches can be tail.
+	// Save and clear TCO flag for condition evaluation, then restore for branches.
+	prevTCO := evalCtx.tcoTail
+	evalCtx.tcoTail = false
 
 	// Evaluate condition
-	condition, err := e.evalNode(condCtx, node.LHS, evalCtx)
+	condition, err := e.evalNode(ctx, node.LHS, evalCtx)
 	if err != nil {
 		return nil, err
 	}
+
+	// Restore TCO flag so branches receive the original tail position.
+	evalCtx.tcoTail = prevTCO
 
 	// Check if condition is truthy
 	if e.isTruthy(condition) {

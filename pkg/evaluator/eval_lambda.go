@@ -69,14 +69,15 @@ func (e *Evaluator) callLambda(ctx context.Context, lambda *Lambda, args []inter
 	}
 
 	// Evaluate body using TCO trampolining.
+	// OPT-01: TCO tail flag is stored on lambdaCtx.tcoTail instead of a context.WithValue wrapper.
 	// We mark the body context as "tail position" so that tail calls (lambda calls in
 	// tail position) return a tcoThunk instead of recursing. The trampoline loop below
 	// then re-executes without growing the Go call stack or the depth counter.
-	tcoCtx := withTCOTail(ctx)
+	lambdaCtx.tcoTail = true
 	var result interface{}
 	var err error
 	for {
-		result, err = e.evalNode(tcoCtx, lambda.Body, lambdaCtx)
+		result, err = e.evalNode(ctx, lambda.Body, lambdaCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -88,6 +89,7 @@ func (e *Evaluator) callLambda(ctx context.Context, lambda *Lambda, args []inter
 		lambda = thunk.lambda
 		args = thunk.args
 		lambdaCtx = lambda.Ctx.Clone()
+		lambdaCtx.tcoTail = true // preserve TCO flag across trampoline iterations
 		for i, param := range lambda.Params {
 			if i < len(args) {
 				lambdaCtx.SetBinding(param, args[i])
