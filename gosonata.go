@@ -14,8 +14,9 @@
 //
 //	// Compile once, evaluate many times
 //	expr, err := gosonata.Compile("$.items[price > 100]")
-//	result1, _ := expr.Eval(ctx, data1)
-//	result2, _ := expr.Eval(ctx, data2)
+//	ev := evaluator.New()
+//	result1, _ := ev.Eval(ctx, expr, data1)
+//	result2, _ := ev.Eval(ctx, expr, data2)
 //
 //	// With options
 //	result, err := gosonata.Eval("$.items", data,

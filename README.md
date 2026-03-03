@@ -77,6 +77,13 @@ func main() {
 For better performance when evaluating the same expression multiple times:
 
 ```go
+import (
+    "context"
+
+    "github.com/sandrolain/gosonata"
+    "github.com/sandrolain/gosonata/pkg/evaluator"
+)
+
 // Compile the expression once
 expr, err := gosonata.Compile("$.items[price > 100]")
 if err != nil {

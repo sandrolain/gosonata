@@ -1,7 +1,7 @@
 # GoSonata API Reference
 
 **Version**: 0.1.0-dev
-**Last Updated**: February 26, 2026
+**Last Updated**: March 3, 2026
 **Go Version**: 1.26.0+
 
 ## Table of Contents
@@ -240,6 +240,36 @@ type CustomFunc = functions.CustomFunc
 
 Type alias for user-defined functions. Re-exports `functions.CustomFunc`
 so callers need not import `pkg/functions` directly.
+
+### AdvancedCustomFunc
+
+```go
+type AdvancedCustomFunc = functions.AdvancedCustomFunc
+// i.e. func(ctx context.Context, caller functions.Caller, args ...interface{}) (interface{}, error)
+```
+
+Type alias for higher-order user-defined functions that need to call back into the
+evaluator (e.g. to invoke a lambda argument). Re-exported from `pkg/functions`
+so callers only need to import the top-level `gosonata` package.
+
+### AdvancedCustomFunctionDef
+
+```go
+type AdvancedCustomFunctionDef = functions.AdvancedCustomFunctionDef
+```
+
+Type alias for the struct that bundles name, signature, and an `AdvancedCustomFunc`
+implementation. Re-exported from `pkg/functions`.
+
+### FunctionEntry
+
+```go
+type FunctionEntry = functions.FunctionEntry
+```
+
+Marker interface implemented by both `CustomFunctionDef` and
+`AdvancedCustomFunctionDef`. Allows mixing both kinds in a single call to
+[`WithFunctions`](#withfunctions).
 
 ### EvalStream (top-level)
 
@@ -541,6 +571,31 @@ eval := evaluator.New(
     evaluator.WithCaching(true),
     evaluator.WithCacheSize(1024),
 )
+```
+
+#### WithCache
+
+```go
+func WithCache(c *cache.Cache) EvalOption
+```
+
+Attaches an external `*cache.Cache` instance. The evaluator uses it regardless of
+the `WithCaching` flag, enabling shared caches across multiple `Evaluator` instances.
+
+**Parameters**:
+
+- `c`: Pre-built `*cache.Cache` (see `pkg/cache`)
+
+**Example**:
+
+```go
+import "github.com/sandrolain/gosonata/pkg/cache"
+
+sharedCache := cache.New(512)
+
+eval1 := evaluator.New(evaluator.WithCache(sharedCache))
+eval2 := evaluator.New(evaluator.WithCache(sharedCache))
+```
 
 #### WithConcurrency
 
@@ -686,6 +741,41 @@ eval := evaluator.New(
     evaluator.WithCustomFunction("mul", "<nn:n>", fnMul),
 )
 ```
+
+### EvalWithBindings
+
+```go
+func (e *Evaluator) EvalWithBindings(ctx context.Context, expr *types.Expression, data interface{}, bindings map[string]interface{}) (interface{}, error)
+```
+
+Evaluates a compiled expression with per-call variable bindings. Useful when the same
+expression is evaluated repeatedly against different data **and** needs different
+`$variable` values each time.
+
+**Parameters**:
+
+- `ctx`: Context for timeout and cancellation
+- `expr`: Compiled expression
+- `data`: Input data (`$` root)
+- `bindings`: Map of variable names (without `$`) to values
+
+**Returns**:
+
+- `interface{}`: Result value
+- `error`: Evaluation error
+
+**Example**:
+
+```go
+expr := gosonata.MustCompile("$.items[price > $threshold]")
+ev := evaluator.New()
+ctx := context.Background()
+
+result1, _ := ev.EvalWithBindings(ctx, expr, data, map[string]interface{}{"threshold": 100.0})
+result2, _ := ev.EvalWithBindings(ctx, expr, data, map[string]interface{}{"threshold": 200.0})
+```
+
+---
 
 ### EvalStream (Evaluator)
 
@@ -1249,7 +1339,7 @@ def := functions.AdvancedCustomFunctionDef{
         fn  := args[1] // *Lambda or *FunctionDef
         result := make([]interface{}, 0, len(arr))
         for _, item := range arr {
-            v, err := caller.CallFunction(ctx, fn, item)
+            v, err := caller.Call(ctx, fn, item)
             if err != nil {
                 return nil, err
             }
@@ -1712,16 +1802,18 @@ result, _ := eval.Eval(context.Background(), expr, data)
 ### Stable APIs
 
 - Top-level functions (`Compile`, `Eval`, `EvalWithContext`, `MustCompile`, `EvalStream`)
+- Top-level types: `CustomFunc`, `AdvancedCustomFunc`, `CustomFunctionDef`, `AdvancedCustomFunctionDef`, `FunctionEntry`, `EvalOption`, `StreamResult`
 - Parser API (`Parse`, `Compile`)
-- Basic evaluator (`New`, `Eval`, `EvalStream`)
+- Evaluator: `New`, `Eval`, `EvalWithBindings`, `EvalStream`
 - Core types (`Expression`, `ASTNode`, `Error`)
-- Options: `WithCaching`, `WithCacheSize`, `WithTimeout`, `WithConcurrency`, `WithDebug`, `WithCustomFunction`
+- Options: `WithCaching`, `WithCacheSize`, `WithCache`, `WithTimeout`, `WithConcurrency`, `WithDebug`, `WithLogger`, `WithMaxDepth`, `WithCustomFunction`, `WithFunctions`
 
 ### Planned Changes (Phase 8+)
 
 - Plugin system
-- WASM export
 - OpenTelemetry integration
+
+> **Note**: WebAssembly (js/wasm and WASI) is already implemented. See [docs/WASM.md](WASM.md).
 
 ---
 

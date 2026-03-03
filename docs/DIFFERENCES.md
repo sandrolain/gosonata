@@ -1,7 +1,7 @@
 # GoSonata Differences and Implementation Notes
 
 **Version**: 0.1.0-dev
-**Last Updated**: February 26, 2026
+**Last Updated**: March 3, 2026
 **Reference**: JSONata 2.1.0+ (JavaScript)
 
 ## Table of Contents

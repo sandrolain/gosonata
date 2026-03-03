@@ -1,7 +1,7 @@
 # GoSonata Architecture
 
 **Version**: 0.1.0-dev
-**Last Updated**: February 22, 2026
+**Last Updated**: March 3, 2026
 **Target**: JSONata 2.1.0+
 
 ## Table of Contents
@@ -118,11 +118,24 @@ gosonata/
 │   │   ├── eval_filter.go   # Filter predicate evaluation
 │   │   ├── eval_operators.go # Binary/unary operators
 │   │   ├── eval_lambda.go   # Lambda functions & closures
+│   │   ├── evaluator_wasm.go # WASM-specific defaults (disables concurrency)
 │   │   ├── fn_*.go          # Built-in function implementations (13 files)
 │   │   └── functions.go     # Built-in function registration
 │   │
+│   ├── ext/                 # Optional extension functions (off by default)
+│   │   ├── ext.go           # Category helpers: WithAll, WithString, …
+│   │   ├── extstring/       # $startsWith, $camelCase, $template, …
+│   │   ├── extnumeric/      # $log, $sign, $trunc, trig, $median, …
+│   │   ├── extarray/        # $first, $last, $chunk, set ops, HOF …
+│   │   ├── extobject/       # $values, $pairs, $pick, $deepMerge, HOF …
+│   │   ├── exttypes/        # $isString, $isEmpty, $default, …
+│   │   ├── extdatetime/     # $dateAdd, $dateDiff, $dateComponents, …
+│   │   ├── extcrypto/       # $uuid, $hash, $hmac
+│   │   ├── extformat/       # $csv, $toCSV, $template
+│   │   └── extfunc/         # $pipe, $memoize (advanced/HOF)
+│   │
 │   ├── functions/           # Custom function extension point
-│   │   └── registry.go      # CustomFunc and CustomFunctionDef types
+│   │   └── registry.go      # CustomFunc, AdvancedCustomFunc, FunctionEntry types
 │   │
 │   ├── types/               # Core type system
 │   │   ├── ast.go           # AST node definitions
@@ -131,6 +144,11 @@ gosonata/
 │   │
 │   ├── runtime/             # Runtime utilities
 │   └── cache/               # LRU expression cache
+│
+├── cmd/
+│   └── wasm/
+│       ├── js/              # js/wasm build entrypoint
+│       └── wasi/            # wasip1 build entrypoint
 ```
 
 ### Package Responsibilities
@@ -199,7 +217,9 @@ Extension point for user-supplied custom functions:
 
 Custom functions are registered via `evaluator.WithCustomFunction(name, sig, fn)` (or
 the top-level `gosonata.WithCustomFunction`) and resolved at evaluation time before
-falling back to built-in functions.
+falling back to built-in functions. For higher-order functions that must call back
+into the evaluator, use `evaluator.WithFunctions(defs...)` with
+`functions.AdvancedCustomFunctionDef` or the `pkg/ext` extension library.
 
 ---
 
@@ -984,17 +1004,22 @@ func WithMeter(meter metric.Meter) EvalOption
 
 #### Phase 7 (✅ Complete)
 
-- LRU expression cache (`pkg/cache`) with `WithCaching` / `WithCacheSize` options
-- Custom function registration via `WithCustomFunction` / `CustomFunc` / `gosonata.WithCustomFunction`
+- LRU expression cache (`pkg/cache`) with `WithCaching` / `WithCacheSize` / `WithCache` options
+- Custom function registration via `WithCustomFunction` / `WithFunctions` / `CustomFunc` / `AdvancedCustomFunc`
 - Streaming API: `evaluator.EvalStream` / `gosonata.EvalStream` (NDJSON, context-aware)
 - Performance optimisations: lazy `EvalContext.bindings`, `bufPool`, regex `sync.Map`, pre-allocation in object constructors
 - Fuzz tests for parser and evaluator
+- Optional extension library (`pkg/ext`) with 60+ extra functions in 9 sub-packages
 - API stabilised toward v1.0.0
 
-#### Phase 8+ (Roadmap)
+#### Phase 8 (✅ Complete)
+
+- **WebAssembly**: Browser and Node.js (js/wasm) and WASI runtime support (`cmd/wasm/`)
+- `EvalWithBindings` convenience method for per-call variable injection
+
+#### Phase 9+ (Roadmap)
 
 - Plugin system
-- WASM export
 - OpenTelemetry integration
 - `EvalMany` convenience API
 
