@@ -116,7 +116,7 @@ const arenaChunkSize = 64
 // The arena MUST stay alive as long as any pointer returned by Alloc is
 // reachable. Attaching the arena to the [Expression] achieves this: the GC
 // collects the arena (and all its chunks) automatically when the Expression
-// is released — including when it is evicted from the LRU cache.
+// is released — including when it is evicted from the expression cache.
 //
 // # Thread safety
 //

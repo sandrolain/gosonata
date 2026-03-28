@@ -52,7 +52,7 @@ func EvalFast(_ context.Context, fp *types.FastPathInfo, raw json.RawMessage) (a
 }
 
 // EvalFastFromResult is like [EvalFast] but accepts the pre-extracted
-// gjson.Result directly. Used by StreamEvaluator to avoid re-extracting
+// gjson.Result directly. Used by [MultiEval] to avoid re-extracting
 // fields when gjson.GetManyBytes has already run a single-pass scan.
 func EvalFastFromResult(fp *types.FastPathInfo, r gjson.Result) (any, bool, error) {
 	if fp == nil {

@@ -1,7 +1,7 @@
 # GoSonata API Reference
 
 **Version**: 0.1.0-dev
-**Last Updated**: March 3, 2026
+**Last Updated**: March 4, 2026
 **Go Version**: 1.26.0+
 
 ## Table of Contents
@@ -25,6 +25,10 @@
 - [Types Package](#types-package)
 - [Functions Package](#functions-package)
 - [Extension Functions (pkg/ext)](#extension-functions-pkgext)
+- [Stream Package (pkg/stream)](#stream-package-pkgstream)
+  - [MultiEval](#multieval)
+  - [EvalObserver](#evalobserver)
+  - [MultiEvalStats](#multievalstats)
 - [Error Handling](#error-handling)
 - [Advanced Usage](#advanced-usage)
 - [Examples](#examples)
@@ -597,7 +601,7 @@ Enables result caching for repeated queries.
 eval := evaluator.New(evaluator.WithCaching(true))
 ```
 
-**Note**: When enabled, compiled expressions are cached in an LRU cache (default 256
+**Note**: When enabled, compiled expressions are cached in a lock-free FIFO cache (default 256
 entries). Cache size can be tuned with `WithCacheSize`. The top-level `gosonata.Eval`
 also benefits when `WithCaching(true)` is passed.
 
@@ -612,7 +616,7 @@ Sets the maximum number of cached compiled expressions. Only meaningful when
 
 **Parameters**:
 
-- `size`: Maximum number of entries in the LRU cache
+- `size`: Maximum number of entries in the cache
 
 **Default**: `256`
 
@@ -628,15 +632,15 @@ eval := evaluator.New(
 #### WithCache
 
 ```go
-func WithCache(c *cache.Cache) EvalOption
+func WithCache(c cache.Cacher) EvalOption
 ```
 
-Attaches an external `*cache.Cache` instance. The evaluator uses it regardless of
+Attaches an external cache implementing the `cache.Cacher` interface. The evaluator uses it regardless of
 the `WithCaching` flag, enabling shared caches across multiple `Evaluator` instances.
 
 **Parameters**:
 
-- `c`: Pre-built `*cache.Cache` (see `pkg/cache`)
+- `c`: A `*cache.ExprCache` (or any `cache.Cacher` implementation) — see `pkg/cache`
 
 **Example**:
 
@@ -1462,6 +1466,193 @@ gosonata.WithFunctions(
 
 ---
 
+## Stream Package (`pkg/stream`)
+
+The `pkg/stream` package provides `MultiEval`, a high-performance engine for evaluating
+**N independent JSONata expressions against a continuous stream of JSON documents**.
+
+It is designed for intensive message-processing pipelines (e.g. Kafka, NATS, file ingestion)
+where the same set of expressions must fire on every incoming document as fast as possible.
+
+### MultiEval
+
+```go
+type MultiEval struct { /* unexported */ }
+
+func NewMultiEval(initial []*types.Expression, opts ...MultiEvalOption) *MultiEval
+func NewMultiEvalWithObserver(initial []*types.Expression, hook EvalObserver, opts ...MultiEvalOption) *MultiEval
+```
+
+Holds a mutable, indexed list of compiled expressions and a built-in `EvalPlan` cache.
+On each document, all requested expressions are resolved through a single set of fast-path
+(gjson) extractions, minimising redundant JSON parsing.
+
+#### Constructors
+
+| Constructor | Usage |
+|---|---|
+| `NewMultiEval(initial, opts...)` | No metrics hook; uses `NoopObserver` |
+| `NewMultiEvalWithObserver(initial, hook, opts...)` | Attach a custom `EvalObserver` |
+
+#### MultiEvalOption
+
+```go
+func WithPlanCacheSize(n int) MultiEvalOption  // default: 256
+func WithEvaluatorOptions(opts ...evaluator.EvalOption) MultiEvalOption
+```
+
+`WithPlanCacheSize` caps the in-memory `EvalPlan` cache size (FIFO eviction).
+`WithEvaluatorOptions` passes evaluator options such as `WithCustomFunction`, `WithMaxDepth`
+to the internal `*evaluator.Evaluator`.
+
+#### Expression Management
+
+```go
+func (se *MultiEval) Compile(query string) (int, error)
+func (se *MultiEval) Add(expr *types.Expression) int
+func (se *MultiEval) Replace(idx int, query string) error
+func (se *MultiEval) Remove(idx int) error
+func (se *MultiEval) Reset()
+func (se *MultiEval) Len() int
+```
+
+- **`Compile`**: Compiles `query` and appends it; returns the slot index.
+- **`Add`**: Appends a pre-compiled expression; returns the slot index.
+- **`Replace`**: Recompiles the expression at `idx` and invalidates the EvalPlan cache.
+- **`Remove`**: Nils out the slot at `idx` (slot stays valid, future evals return `nil`).
+- **`Reset`**: Clears all slots and the EvalPlan cache.
+
+#### Evaluation
+
+```go
+func (se *MultiEval) Dispatch(
+    ctx context.Context,
+    rawJSON json.RawMessage,
+    topicKey string,
+    indices []int,
+) ([]interface{}, error)
+
+func (se *MultiEval) DispatchOne(
+    ctx context.Context,
+    rawJSON json.RawMessage,
+    topicKey string,
+    exprIndex int,
+) (interface{}, error)
+```
+
+**`Dispatch`** evaluates the expressions at `indices` against `rawJSON` in one pass:
+
+1. Looks up (or builds) a `EvalPlan` keyed by `(topicKey, indices fingerprint)`.
+2. For fast-path slots: extracts the gjson result from a single `gjson.GetManyBytes` call.
+3. For full-path slots: delegates to `evaluator.EvalBytes`.
+4. Returns a `[]interface{}` aligned with `indices` (nil entry for removed slots).
+
+`topicKey` is a caller-provided string that differentiates `EvalPlan` entries where
+the same indices apply to documents with the same field structure. Use the same key for
+all documents of the same schema/topic.
+
+**`DispatchOne`** is a convenience wrapper: calls `Dispatch` with `[]int{exprIndex}` and
+returns the single result.
+
+**Example**:
+
+```go
+import (
+    "context"
+    "encoding/json"
+
+    "github.com/sandrolain/gosonata/pkg/stream"
+    gosonata "github.com/sandrolain/gosonata"
+)
+
+se := stream.NewMultiEval(nil)
+
+// Register expressions once at start-up.
+idxName, _ := se.Compile("Account.Name")
+idxTotal, _ := se.Compile("order.total")
+idxCount, _ := se.Compile("$count(items)")
+idxFilter, _ := se.Compile("items[price > 20].name")
+
+indices := []int{idxName, idxTotal, idxCount, idxFilter}
+ctx := context.Background()
+
+// Evaluate every incoming document.
+for raw := range incomingDocuments {
+    results, err := se.Dispatch(ctx, raw, "orders:v1", indices)
+    if err != nil {
+        log.Printf("eval error: %v", err)
+        continue
+    }
+    fmt.Println(results[0], results[1], results[2], results[3])
+}
+```
+
+#### Stats
+
+```go
+func (se *MultiEval) Stats() MultiEvalStats
+```
+
+### MultiEvalStats
+
+```go
+type MultiEvalStats struct {
+    EvalCount     int64     // total Dispatch / DispatchOne calls
+    FastPathCount int64     // evaluations served by fast path
+    ErrorCount    int64     // evaluations that returned an error
+    Plans         PlanStats // EvalPlan cache statistics
+}
+
+type PlanStats struct {
+    Size      int
+    Hits      int64
+    Misses    int64
+    Evictions int64
+}
+```
+
+### EvalObserver
+
+```go
+type EvalObserver interface {
+    OnEval(exprIndex int, fastPath bool, duration time.Duration, err error)
+    OnPlanHit(planKey string)
+    OnPlanMiss(planKey string)
+    OnEviction()
+}
+
+type NoopObserver struct{}
+```
+
+`NoopObserver` implements `EvalObserver` with zero-overhead no-op methods; it is used
+when `NewMultiEval` is called without a hook.
+
+Implement `EvalObserver` to pipe telemetry into Prometheus, OpenTelemetry, or any other
+monitoring system.
+
+**Example**:
+
+```go
+type promHook struct {
+    evalTotal    prometheus.Counter
+    fastTotal    prometheus.Counter
+    cacheHits    prometheus.Counter
+    cacheMisses  prometheus.Counter
+}
+
+func (h *promHook) OnEval(idx int, fast bool, d time.Duration, err error) {
+    h.evalTotal.Inc()
+    if fast { h.fastTotal.Inc() }
+}
+func (h *promHook) OnPlanHit(key string)  { h.cacheHits.Inc() }
+func (h *promHook) OnPlanMiss(key string) { h.cacheMisses.Inc() }
+func (h *promHook) OnEviction()            { /* optional */ }
+
+se := stream.NewMultiEvalWithObserver(nil, &promHook{...})
+```
+
+---
+
 ## Error Handling
 
 ### Error Types
@@ -1905,7 +2096,8 @@ result, _ := eval.Eval(context.Background(), expr, data)
 - Top-level functions (`Compile`, `Eval`, `EvalWithContext`, `MustCompile`, `EvalStream`)
 - Top-level types: `CustomFunc`, `AdvancedCustomFunc`, `CustomFunctionDef`, `AdvancedCustomFunctionDef`, `FunctionEntry`, `EvalOption`, `StreamResult`
 - Parser API (`Parse`, `Compile`)
-- Evaluator: `New`, `Eval`, `EvalWithBindings`, `EvalStream`
+- Evaluator: `New`, `Eval`, `EvalWithBindings`, `EvalStream`, `EvalBytes`
+- Stream package: `NewMultiEval`, `NewMultiEvalWithObserver`, `Dispatch`, `DispatchOne`, `MultiEvalStats`, `EvalObserver`
 - Core types (`Expression`, `ASTNode`, `Error`)
 - Options: `WithCaching`, `WithCacheSize`, `WithCache`, `WithTimeout`, `WithConcurrency`, `WithDebug`, `WithLogger`, `WithMaxDepth`, `WithCustomFunction`, `WithFunctions`
 

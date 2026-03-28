@@ -1,7 +1,7 @@
 # GoSonata Architecture
 
 **Version**: 0.1.0-dev
-**Last Updated**: March 3, 2026
+**Last Updated**: March 4, 2026
 **Target**: JSONata 2.1.0+
 
 ## Table of Contents
@@ -143,7 +143,11 @@ gosonata/
 │   │   └── errors.go        # Error types & codes
 │   │
 │   ├── runtime/             # Runtime utilities
-│   └── cache/               # LRU expression cache
+│   ├── cache/               # Lock-free FIFO expression cache
+│   └── stream/              # Multi-expression streaming evaluator
+│       ├── stream.go        # MultiEval, EvalPlan, MultiEvalOption, MultiEvalStats
+│       ├── plan_cache.go    # Internal EvalPlan FIFO cache (evalPlanCache)
+│       └── metrics.go       # EvalObserver interface + NoopObserver
 │
 ├── cmd/
 │   └── wasm/
@@ -220,6 +224,17 @@ the top-level `gosonata.WithCustomFunction`) and resolved at evaluation time bef
 falling back to built-in functions. For higher-order functions that must call back
 into the evaluator, use `evaluator.WithFunctions(defs...)` with
 `functions.AdvancedCustomFunctionDef` or the `pkg/ext` extension library.
+
+#### `pkg/stream`
+
+High-throughput multi-expression evaluator for streaming workloads:
+
+- **`MultiEval`**: Holds N compiled expressions; evaluates any subset on a raw JSON document in a single pass.
+- **`EvalPlan`**: Immutable precomputed evaluation plan for a `(topicKey, indices)` pair. Deduplicates gjson paths across all fast-path expressions; tracks which slots need full-AST eval.
+- **`evalPlanCache`**: Internal lock-free FIFO cache for `*EvalPlan`. Same design as `ExprCache` but typed to `*EvalPlan`; lives inside `pkg/stream` to avoid circular imports.
+- **`EvalObserver`**: Observer interface for eval events, cache hits/misses, and evictions. `NoopObserver` is the zero-overhead default.
+
+**Key Types**: `MultiEval`, `EvalPlan`, `MultiEvalOption`, `MultiEvalStats`, `PlanStats`, `EvalObserver`, `NoopObserver`
 
 ---
 
@@ -893,7 +908,7 @@ func BenchmarkEvaluation(b *testing.B) {
 
 ### Concurrent Evaluation
 
-> **Note**: `EvalMany` is a planned convenience API. Currently, callers can
+> **Note**: `Dispatch` is a planned convenience API. Currently, callers can
 > achieve the same result by launching goroutines manually:
 
 ```go
@@ -937,25 +952,33 @@ func (r *FunctionRegistry) Lookup(name string) (BuiltinFunc, bool) {
 #### Expression Cache (`pkg/cache`)
 
 ```go
-// Thread-safe LRU cache for compiled expressions.
-type Cache struct {
-    mu       sync.RWMutex
-    capacity int
-    ll       *list.List
-    items    map[string]*list.Element
+// Cacher is the interface implemented by all cache strategies.
+type Cacher interface {
+    Get(key string) (*types.Expression, bool)
+    Set(key string, expr *types.Expression)
+    GetOrCompile(key string, compile func() (*types.Expression, error)) (*types.Expression, error)
+    Len() int
+    Capacity() int
+    Invalidate(key string)
+    Clear()
 }
 
-func New(capacity int) *Cache
-func (c *Cache) Get(key string) (*types.Expression, bool)
-func (c *Cache) Set(key string, expr *types.Expression)
-func (c *Cache) GetOrCompile(key string, compile func() (*types.Expression, error)) (*types.Expression, error)
-func (c *Cache) Len() int
-func (c *Cache) Invalidate(key string)
-func (c *Cache) Clear()
+// ExprCache: FIFO eviction, lock-free reads via atomic.Pointer.
+// Writes serialized by sync.Mutex; snapshot replaced atomically.
+type ExprCache struct { /* ... */ }
+
+func New(capacity int) *ExprCache
+func (c *ExprCache) Get(key string) (*types.Expression, bool)  // lock-free
+func (c *ExprCache) Set(key string, expr *types.Expression)     // mutex-serialized
+func (c *ExprCache) GetOrCompile(key string, compile func() (*types.Expression, error)) (*types.Expression, error)
+func (c *ExprCache) Len() int
+func (c *ExprCache) Invalidate(key string)
+func (c *ExprCache) Clear()
+func (c *ExprCache) Stats() ExprCacheStats
 ```
 
 Enabled via `evaluator.WithCaching(true)` or `evaluator.WithCacheSize(n)`.
-The default cache holds 256 entries with LRU eviction.
+The default cache holds 256 entries with FIFO eviction and lock-free reads (~52 ns/op parallel).
 
 ### Race Condition Prevention
 
@@ -1004,7 +1027,7 @@ func WithMeter(meter metric.Meter) EvalOption
 
 #### Phase 7 (✅ Complete)
 
-- LRU expression cache (`pkg/cache`) with `WithCaching` / `WithCacheSize` / `WithCache` options
+- Expression cache (`pkg/cache`) with `WithCaching` / `WithCacheSize` / `WithCache` options
 - Custom function registration via `WithCustomFunction` / `WithFunctions` / `CustomFunc` / `AdvancedCustomFunc`
 - Streaming API: `evaluator.EvalStream` / `gosonata.EvalStream` (NDJSON, context-aware)
 - Performance optimisations: lazy `EvalContext.bindings`, `bufPool`, regex `sync.Map`, pre-allocation in object constructors
@@ -1017,11 +1040,31 @@ func WithMeter(meter metric.Meter) EvalOption
 - **WebAssembly**: Browser and Node.js (js/wasm) and WASI runtime support (`cmd/wasm/`)
 - `EvalWithBindings` convenience method for per-call variable injection
 
-#### Phase 9+ (Roadmap)
+#### Phase 9 (✅ Complete)
+
+- **gjson fast-path** (`pkg/evaluator/eval_fast.go`): Zero-copy JSON extraction for pure-path, equality, and 23 supported stdlib function expressions using `gjson.GetManyBytes`. 10×+ speedup for eligible expressions.
+- `EvalBytes` / `EvalBytesWithContext` on `Evaluator` and the top-level `gosonata` package.
+- `IsFastPath()` and `AnalyzeFastPath()` introspection on `*types.Expression`.
+
+#### Phase 10 (✅ Complete)
+
+- **`ExprCache`** (`pkg/cache`): Lock-free FIFO eviction cache backed by `atomic.Pointer[snapshot]`. Replaces the previous LRU implementation. Read path is allocation-free (~52 ns/op parallel); writes serialised by a single `sync.Mutex`.
+- `Cacher` interface so callers can inject alternative cache strategies.
+
+#### Phase 11 (✅ Complete)
+
+- **`pkg/stream` — `MultiEval`**: Multi-expression streaming engine.
+  - `EvalPlan` deduplicates gjson paths across N fast-path expressions, batching all extractions into a single `gjson.GetManyBytes` call per document.
+  - `evalPlanCache`: internal FIFO cache for `*EvalPlan` (same lock-free design as `ExprCache`).
+  - `EvalObserver` observer interface with `NoopObserver` default.
+  - `Dispatch` / `DispatchOne` evaluation entry points with mutable slot management (`Compile`, `Add`, `Replace`, `Remove`, `Reset`).
+  - Full concurrency-safety validated with `go test -race`.
+
+#### Phase 12+ (Roadmap)
 
 - Plugin system
 - OpenTelemetry integration
-- `EvalMany` convenience API
+- `Dispatch` convenience API
 
 ---
 

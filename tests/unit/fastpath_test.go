@@ -3,6 +3,7 @@ package unit_test
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"testing"
 
 	"github.com/sandrolain/gosonata/pkg/evaluator"
@@ -326,7 +327,11 @@ func BenchmarkEvalBytes_Sum(b *testing.B) {
 // helper
 // ---------------------------------------------------------------------------
 
-// deepEqual compares want and got, handling slice ordering for $keys/$distinct.
+// deepEqual compares want and got.
+// For []interface{} values containing only strings (e.g. $keys, $distinct results),
+// both slices are sorted before comparison so that ordering differences between
+// the fast-path (document order, gjson) and the full evaluator (map iteration,
+// non-deterministic) do not cause spurious failures.
 func deepEqual(t *testing.T, want, got interface{}) {
 	t.Helper()
 
@@ -338,10 +343,39 @@ func deepEqual(t *testing.T, want, got interface{}) {
 		want = nil
 	}
 
+	// For string slices, sort both sides before comparing so that map-order
+	// non-determinism in the full evaluator does not cause flaky failures.
+	if wSlice, ok := want.([]interface{}); ok {
+		if gSlice, ok2 := got.([]interface{}); ok2 {
+			if allStrings(wSlice) && allStrings(gSlice) {
+				want = sortedStringSlice(wSlice)
+				got = sortedStringSlice(gSlice)
+			}
+		}
+	}
+
 	wJSON, _ := json.Marshal(want)
 	gJSON, _ := json.Marshal(got)
 
 	if string(wJSON) != string(gJSON) {
 		t.Errorf("want %s, got %s", wJSON, gJSON)
 	}
+}
+
+func allStrings(s []interface{}) bool {
+	for _, v := range s {
+		if _, ok := v.(string); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedStringSlice(s []interface{}) []string {
+	out := make([]string, len(s))
+	for i, v := range s {
+		out[i] = v.(string)
+	}
+	sort.Strings(out)
+	return out
 }

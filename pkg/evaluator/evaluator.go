@@ -23,7 +23,7 @@ package evaluator
 // The evaluator supports concurrent evaluation of independent expressions.
 // This can significantly improve performance for complex queries.
 //
-//	results, err := evaluator.EvalMany(ctx, queries, data)
+//	results, err := evaluator.Dispatch(ctx, queries, data)
 
 import (
 	"context"
@@ -40,7 +40,7 @@ import (
 type Evaluator struct {
 	opts      EvalOptions
 	logger    *slog.Logger
-	cache     *cache.Cache            // non-nil when Caching is enabled
+	cache     cache.Cacher            // non-nil when Caching is enabled
 	customFns map[string]*FunctionDef // user-registered custom functions
 }
 
@@ -48,14 +48,15 @@ type Evaluator struct {
 type EvalOptions struct {
 	// Caching enables expression compilation caching.
 	// When true, compiled expressions are cached by query string.
-	// The default cache holds up to 256 entries with LRU eviction.
+	// The default cache holds up to 256 entries with FIFO eviction (lock-free reads).
 	Caching bool
 	// CacheSize sets the maximum number of cached expressions.
 	// Only used when Caching is true and no explicit Cache is provided.
 	// Defaults to 256.
 	CacheSize int
-	// Cache is a custom expression cache. If non-nil, Caching is implicitly enabled.
-	Cache *cache.Cache
+	// Cache is a custom expression cache implementing the cache.Cacher interface.
+	// If non-nil, Caching is implicitly enabled.
+	Cache cache.Cacher
 	// Concurrency enables concurrent evaluation.
 	Concurrency bool
 	// MaxDepth limits recursion depth.
@@ -97,7 +98,7 @@ func New(opts ...EvalOption) *Evaluator {
 	}
 
 	// Initialise expression cache when caching is enabled.
-	var c *cache.Cache
+	var c cache.Cacher
 	if options.Cache != nil {
 		c = options.Cache
 	} else if options.Caching {
@@ -144,7 +145,7 @@ func New(opts ...EvalOption) *Evaluator {
 }
 
 // Cache returns the expression cache, or nil if caching is disabled.
-func (e *Evaluator) Cache() *cache.Cache {
+func (e *Evaluator) Cache() cache.Cacher {
 	return e.cache
 }
 
@@ -275,7 +276,7 @@ func (e *Evaluator) EvalWithBindings(ctx context.Context, expr *types.Expression
 type EvalOption func(*EvalOptions)
 
 // WithCaching enables or disables expression compilation caching.
-// When enabled, a default LRU cache of 256 entries is created.
+// When enabled, a lock-free FIFO cache of 256 entries is created.
 // To control the cache size use WithCacheSize; to supply your own cache use WithCache.
 func WithCaching(enabled bool) EvalOption {
 	return func(opts *EvalOptions) {
@@ -291,9 +292,9 @@ func WithCacheSize(size int) EvalOption {
 	}
 }
 
-// WithCache attaches an external expression cache.
+// WithCache attaches an external expression cache implementing the cache.Cacher interface.
 // The evaluator will use this cache regardless of the Caching flag.
-func WithCache(c *cache.Cache) EvalOption {
+func WithCache(c cache.Cacher) EvalOption {
 	return func(opts *EvalOptions) {
 		opts.Cache = c
 	}
