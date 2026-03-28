@@ -150,8 +150,8 @@ type streamCountingHook struct {
 }
 
 func (h *streamCountingHook) OnEval(_ int, _ bool, _ time.Duration, _ error) { h.evals.Add(1) }
-func (h *streamCountingHook) OnPlanHit(_ string)                            { h.hits.Add(1) }
-func (h *streamCountingHook) OnPlanMiss(_ string)                           { h.misses.Add(1) }
+func (h *streamCountingHook) OnPlanHit(_ string)                             { h.hits.Add(1) }
+func (h *streamCountingHook) OnPlanMiss(_ string)                            { h.misses.Add(1) }
 func (h *streamCountingHook) OnEviction()                                    { h.evictions.Add(1) }
 
 func TestMultiEval_CacheHitRate(t *testing.T) {
