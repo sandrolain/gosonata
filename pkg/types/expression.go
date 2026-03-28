@@ -14,6 +14,10 @@ package types
 // An Expression can be evaluated multiple times against different data
 // by passing it to [evaluator.Evaluator.Eval]. It is safe for concurrent use
 // by multiple goroutines.
+//
+// After compilation, the expression may carry a [FastPathInfo] when the
+// static analyser determines it can be evaluated zero-copy against raw JSON
+// bytes via [Expression.EvalBytes]. Call [Expression.IsFastPath] to check.
 type Expression struct {
 	ast    *ASTNode
 	source string
@@ -22,6 +26,11 @@ type Expression struct {
 	// ensures the arena is not GC'd while the Expression (or a cache entry
 	// holding it) is still alive.  OPT-11.
 	arena *NodeArena
+
+	// FastPath is set by the parser when static analysis determines the
+	// expression can be evaluated zero-copy against json.RawMessage.
+	// nil means the expression requires full AST evaluation.
+	FastPath *FastPathInfo
 }
 
 // NewExpression creates a new Expression from an AST.
@@ -57,4 +66,19 @@ func (e *Expression) AddError(err error) {
 // String returns a string representation of the expression.
 func (e *Expression) String() string {
 	return e.source
+}
+
+// IsFastPath reports whether the expression was classified for zero-copy
+// fast-path evaluation against raw JSON bytes.
+//
+// When true, [Expression.EvalBytes] skips json.Unmarshal entirely and
+// extracts fields via gjson with zero-copy string views.
+func (e *Expression) IsFastPath() bool {
+	return e.FastPath != nil
+}
+
+// SetFastPath stores the result of the compile-time fast-path analysis.
+// Called exclusively by the parser after static analysis completes.
+func (e *Expression) SetFastPath(fp *FastPathInfo) {
+	e.FastPath = fp
 }

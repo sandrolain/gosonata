@@ -110,6 +110,68 @@ result, err := gosonata.Eval("$.items", data,
 )
 ```
 
+### EvalBytes — zero-copy fast path
+
+When working with raw JSON (e.g. from an HTTP body or a message queue), use `EvalBytes` to
+evaluate an expression directly against `json.RawMessage` **without unmarshalling the entire
+document first**.
+
+```go
+raw := json.RawMessage(`{"user":{"email":"alice@example.com","role":"admin"},"price":99.99}`)
+
+// Simple field extraction — never calls json.Unmarshal
+result, err := gosonata.EvalBytes("user.email", raw)
+// → "alice@example.com"
+
+// Comparison predicate
+result, err = gosonata.EvalBytes(`user.role = "admin"`, raw)
+// → true
+
+// Built-in function
+result, err = gosonata.EvalBytes("$exists(user.email)", raw)
+// → true
+```
+
+#### When the fast path is active
+
+`EvalBytes` automatically detects at compile time whether the expression is eligible for
+zero-copy evaluation (the **fast path**). Eligible patterns are:
+
+| Pattern | Example |
+|---|---|
+| Pure dotted-path navigation | `user.address.city` |
+| Equality / inequality vs a literal | `status = "active"`, `code != 0` |
+| Single stdlib function on a path | `$exists(a.b)`, `$lowercase(name)`, `$sum(totals)` |
+
+Supported fast-path functions: `$exists`, `$not`, `$boolean`, `$string`, `$number`,
+`$lowercase`, `$uppercase`, `$trim`, `$length`, `$type`, `$abs`, `$floor`, `$ceil`,
+`$sqrt`, `$count`, `$sum`, `$max`, `$min`, `$average`, `$reverse`, `$keys`,
+`$distinct`, `$contains`.
+
+Expressions that do not match these patterns (predicates, wildcards, lambdas, etc.) fall back
+to standard full-AST evaluation automatically — there is nothing to configure.
+
+You can introspect eligibility after compilation:
+
+```go
+expr, _ := gosonata.Compile("user.email")
+if expr.IsFastPath() {
+    // will use zero-copy path in EvalBytes
+}
+```
+
+#### Performance
+
+Benchmarks on Apple M2 (Go 1.26, arm64), expression pre-compiled once:
+
+| Scenario | `EvalBytes` ns/op | `Eval` + `json.Unmarshal` ns/op | Speedup |
+|---|---:|---:|---:|
+| Pure path extraction | ~345 | ~2,053 | **~6×** |
+| Comparison predicate | ~364 | ~2,053 | **~5.6×** |
+| `$exists` check | ~332 | ~2,053 | **~6.2×** |
+
+Allocations drop from ~42 to ~6 per call for the pure-path case.
+
 ## Examples
 
 ### Extract Data

@@ -289,6 +289,58 @@ for res := range ch {
 }
 ```
 
+### EvalBytes
+
+```go
+func EvalBytes(query string, raw json.RawMessage, opts ...evaluator.EvalOption) (interface{}, error)
+```
+
+Zero-copy evaluation directly against raw JSON bytes. Compiles `query` and delegates to
+[`Evaluator.EvalBytes`](#evalbytes-evaluator).
+
+For expressions that qualify for the **fast path** (pure paths, equality comparisons,
+and 23 supported stdlib functions), no `json.Unmarshal` call is made on the input document.
+Complex expressions fall back to full-AST evaluation automatically.
+
+**Parameters**:
+
+- `query`: JSONata expression string
+- `raw`: Raw JSON input (`json.RawMessage` or `[]byte`)
+- `opts`: Optional evaluator options
+
+**Returns**:
+
+- `interface{}`: Result value
+- `error`: Compilation or evaluation error
+
+**Example**:
+
+```go
+raw := json.RawMessage(`{"user":{"email":"alice@example.com","active":true}}`)
+
+email, err := gosonata.EvalBytes("user.email", raw)
+// → "alice@example.com"
+
+active, err := gosonata.EvalBytes("$exists(user.email)", raw)
+// → true
+```
+
+### EvalBytesWithContext
+
+```go
+func EvalBytesWithContext(ctx context.Context, query string, raw json.RawMessage, opts ...evaluator.EvalOption) (interface{}, error)
+```
+
+Like `EvalBytes` but with a custom context for timeout and cancellation.
+
+**Example**:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+defer cancel()
+result, err := gosonata.EvalBytesWithContext(ctx, "user.role", raw)
+```
+
 ### StreamResult (top-level)
 
 ```go
@@ -804,6 +856,55 @@ for res := range ch {
     }
     fmt.Println(res.Value)
 }
+```
+
+### EvalBytes (Evaluator)
+
+```go
+func (e *Evaluator) EvalBytes(ctx context.Context, expr *types.Expression, raw json.RawMessage) (interface{}, error)
+```
+
+Evaluates a compiled expression directly against raw JSON bytes. For fast-path eligible
+expressions the evaluation is zero-copy (no `json.Unmarshal` on the full document).
+All other expressions fall back to full-AST evaluation automatically.
+
+**Fast-path eligibility** is determined at compile time by `parser.Compile` via static AST
+analysis. Call `expr.IsFastPath()` to check eligibility after compilation.
+
+**Eligible patterns**:
+
+| Pattern | Example |
+|---|---|
+| Pure dotted-path | `user.address.city` |
+| Equality / inequality vs literal | `status = "active"`, `code != 0` |
+| Supported stdlib function on path | `$exists(a.b)`, `$sum(totals)` |
+
+**Supported fast-path functions**: `$exists`, `$not`, `$boolean`, `$string`, `$number`,
+`$lowercase`, `$uppercase`, `$trim`, `$length`, `$type`, `$abs`, `$floor`, `$ceil`,
+`$sqrt`, `$count`, `$sum`, `$max`, `$min`, `$average`, `$reverse`, `$keys`,
+`$distinct`, `$contains`.
+
+**Parameters**:
+
+- `ctx`: Context for timeout and cancellation
+- `expr`: Compiled expression (from `parser.Compile`)
+- `raw`: Raw JSON input
+
+**Returns**:
+
+- `interface{}`: Result value
+- `error`: Evaluation error
+
+**Example**:
+
+```go
+expr, _ := parser.Compile("user.email")
+
+ev := evaluator.New()
+raw := json.RawMessage(`{"user":{"email":"bob@example.com"}}`)
+
+result, err := ev.EvalBytes(context.Background(), expr, raw)
+// → "bob@example.com"
 ```
 
 ### StreamResult

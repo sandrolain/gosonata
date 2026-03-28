@@ -49,6 +49,7 @@ package gosonata
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"time"
@@ -209,4 +210,45 @@ func EvalStream(ctx context.Context, query string, r io.Reader, opts ...EvalOpti
 	}
 	eval := evaluator.New(opts...)
 	return eval.EvalStream(ctx, expr, r)
+}
+
+// EvalBytes is a convenience function that compiles query and evaluates it
+// against raw JSON bytes in a single call.
+//
+// For expressions eligible for the zero-copy fast path (simple field access,
+// equality comparisons, and supported stdlib functions), this avoids a full
+// json.Unmarshal. Call expr.IsFastPath() on a pre-compiled expression to check
+// whether the fast path applies.
+//
+// Example:
+//
+//	result, err := gosonata.EvalBytes(`user.email`, rawJSON)
+func EvalBytes(query string, raw json.RawMessage, opts ...EvalOption) (any, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return EvalBytesWithContext(ctx, query, raw, opts...)
+}
+
+// EvalBytesWithContext evaluates an expression against raw JSON bytes with
+// a custom context.
+func EvalBytesWithContext(ctx context.Context, query string, raw json.RawMessage, opts ...EvalOption) (any, error) {
+	eval := evaluator.New(opts...)
+
+	var (
+		expr *types.Expression
+		err  error
+	)
+
+	if c := eval.Cache(); c != nil {
+		expr, err = c.GetOrCompile(query, func() (*types.Expression, error) {
+			return Compile(query)
+		})
+	} else {
+		expr, err = Compile(query)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return eval.EvalBytes(ctx, expr, raw)
 }

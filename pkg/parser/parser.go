@@ -53,7 +53,14 @@ func Parse(query string) (*types.Expression, error) {
 // Compile is an alias for Parse, provided for API consistency.
 func Compile(query string, opts ...CompileOption) (*types.Expression, error) {
 	p := NewParser(query, opts...)
-	return p.Parse()
+	expr, err := p.Parse()
+	if err != nil {
+		return nil, err
+	}
+	// Static fast-path analysis: classify the expression once at compile time
+	// so that EvalBytes can skip json.Unmarshal for eligible expressions.
+	expr.SetFastPath(AnalyzeFastPath(expr.AST()))
+	return expr, nil
 }
 
 // CompileOption configures compilation behavior.
