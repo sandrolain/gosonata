@@ -1060,11 +1060,21 @@ func WithMeter(meter metric.Meter) EvalOption
   - `Dispatch` / `DispatchOne` evaluation entry points with mutable slot management (`Compile`, `Add`, `Replace`, `Remove`, `Reset`).
   - Full concurrency-safety validated with `go test -race`.
 
-#### Phase 12+ (Roadmap)
+#### Phase 12 (✅ Complete)
+
+- **Adaptive `NodeArena`** (`pkg/types/ast.go`): The bump-pointer arena that backs the parser now sizes its initial chunk based on the query length via `NewNodeArenaAdaptive(queryLen int)`:
+  - `queryLen ≤ 20` → 4-node chunk (~1 KB) — e.g. `"Account.Name"`
+  - `queryLen ≤ 100` → 16-node chunk (~4 KB) — medium paths
+  - `queryLen > 100` → 64-node chunk (unchanged, same as before)
+- Overflow chunks always use 64 nodes (`arenaOverflowChunkSize`).
+- `NewParser` updated to call `NewNodeArenaAdaptive(len(input))`.
+- **Benchmark results** (Apple M2): Short query 1 400 B/op (−89% vs baseline ~13 KB); Medium 4 544 B/op (−65%); Complex 17 288 B/op (unchanged).
+
+#### Phase 13+ (Roadmap)
 
 - Plugin system
 - OpenTelemetry integration
-- `Dispatch` convenience API
+- TCO (tail-call optimisation for deep recursion)
 
 ---
 

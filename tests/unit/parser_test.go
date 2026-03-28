@@ -1019,3 +1019,43 @@ func TestParseAdvancedPrecedence(t *testing.T) {
 		})
 	}
 }
+
+// ----------------------------------------------------------------------------
+// Benchmarks — NodeArena adaptive sizing (Fase 4)
+// ----------------------------------------------------------------------------
+
+// BenchmarkParse_Short measures parse time for a short expression (≤20 chars).
+// With the adaptive arena the initial chunk holds only 4 nodes, reducing
+// heap allocations from ~16 KB to ~1 KB for such queries.
+func BenchmarkParse_Short(b *testing.B) {
+	const query = "Account.Name" // 12 chars → 4-node arena
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = parser.Parse(query)
+	}
+}
+
+// BenchmarkParse_Medium measures parse time for a medium expression (≤100 chars).
+// The adaptive arena uses a 16-node initial chunk.
+func BenchmarkParse_Medium(b *testing.B) {
+	// 38 chars → 16-node arena
+	const query = "Account.Order.Product[Price > 10].Name"
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = parser.Parse(query)
+	}
+}
+
+// BenchmarkParse_Complex measures parse time for a complex expression (>100 chars).
+// Falls back to the default 64-node initial chunk.
+func BenchmarkParse_Complex(b *testing.B) {
+	// 150+ chars → 64-node arena (baseline behaviour unchanged)
+	const query = `$reduce($map(items, function($v, $i){{"name": $v.name, "rank": $i + 1, "score": $v.price * 1.2}}, function($acc, $x){$acc & [" " & $x.name]}, []))`
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = parser.Parse(query)
+	}
+}

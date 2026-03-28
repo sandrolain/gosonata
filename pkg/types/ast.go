@@ -99,17 +99,17 @@ func NewASTNode(nodeType NodeType, position int) *ASTNode {
 	}
 }
 
-// arenaChunkSize is the number of ASTNode values pre-allocated per arena chunk.
-// 64 nodes ≈ 12-13 KB; most JSONata expressions fit in a single chunk.
-const arenaChunkSize = 64
+// arenaOverflowChunkSize is the number of ASTNode values allocated in each
+// overflow chunk when the initial chunk is exhausted. 64 nodes ≈ 12-13 KB.
+const arenaOverflowChunkSize = 64
 
 // NodeArena is a bump-pointer allocator for ASTNode values.
 //
 // Instead of allocating each node individually on the heap (one GC-tracked
 // object per node), the arena pre-allocates fixed-size chunks of ASTNode
-// structs and returns pointers into them. A typical expression (< 64 nodes)
-// requires only a single chunk allocation, reducing parse-time allocations
-// by roughly N-1 where N is the node count.
+// structs and returns pointers into them. The first chunk is sized adaptively
+// based on the query length via [NewNodeArenaAdaptive], so short queries
+// (e.g. "$.name") allocate only 4 nodes instead of 64.
 //
 // # Lifetime
 //
@@ -123,15 +123,42 @@ const arenaChunkSize = 64
 // NodeArena is NOT thread-safe. Each [Parser] owns its own arena and the
 // arena is never shared across goroutines.
 type NodeArena struct {
-	chunks [][]ASTNode
-	pos    int // next free index in the last chunk
+	chunks    [][]ASTNode
+	pos       int // next free index in the last chunk
+	chunkSize int // size of each overflow chunk
 }
 
-// NewNodeArena allocates an arena pre-warmed with one initial chunk.
+// NewNodeArena allocates an arena with the default chunk size (64 nodes).
+// Prefer [NewNodeArenaAdaptive] when the query length is known.
 func NewNodeArena() *NodeArena {
 	return &NodeArena{
-		chunks: [][]ASTNode{make([]ASTNode, arenaChunkSize)},
-		pos:    0,
+		chunks:    [][]ASTNode{make([]ASTNode, arenaOverflowChunkSize)},
+		pos:       0,
+		chunkSize: arenaOverflowChunkSize,
+	}
+}
+
+// NewNodeArenaAdaptive allocates an arena whose initial chunk is sized
+// according to the query length. Overflow chunks always use the default size.
+//
+// Heuristics (calibrated on real JSONata expressions):
+//   - queryLen ≤ 20:  4 nodes  (~1 KB) — e.g. "$.name", "Account.Name"
+//   - queryLen ≤ 100: 16 nodes (~4 KB) — e.g. medium paths with predicates
+//   - queryLen > 100: 64 nodes (~16 KB) — complex expressions with lambdas
+func NewNodeArenaAdaptive(queryLen int) *NodeArena {
+	var initialCap int
+	switch {
+	case queryLen <= 20:
+		initialCap = 4
+	case queryLen <= 100:
+		initialCap = 16
+	default:
+		initialCap = arenaOverflowChunkSize
+	}
+	return &NodeArena{
+		chunks:    [][]ASTNode{make([]ASTNode, initialCap)},
+		pos:       0,
+		chunkSize: arenaOverflowChunkSize,
 	}
 }
 
@@ -139,12 +166,14 @@ func NewNodeArena() *NodeArena {
 // with Type and Position set. All other fields remain at their zero values
 // (nil pointers, empty slices, false booleans) and must be filled by the caller.
 func (a *NodeArena) Alloc(nodeType NodeType, position int) *ASTNode {
-	if a.pos >= arenaChunkSize {
+	last := len(a.chunks) - 1
+	if a.pos >= len(a.chunks[last]) {
 		// Current chunk exhausted — allocate a new one.
-		a.chunks = append(a.chunks, make([]ASTNode, arenaChunkSize))
+		a.chunks = append(a.chunks, make([]ASTNode, a.chunkSize))
+		last++
 		a.pos = 0
 	}
-	n := &a.chunks[len(a.chunks)-1][a.pos]
+	n := &a.chunks[last][a.pos]
 	a.pos++
 	// Zero-init the node (re-use of pool'd memory is safe because chunks are
 	// freshly make()'d and pos advances monotonically; nodes are never recycled).

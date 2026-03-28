@@ -36,7 +36,7 @@ func NewParser(input string, opts ...CompileOption) *Parser {
 	p := &Parser{
 		lexer: NewLexer(input),
 		opts:  options,
-		arena: types.NewNodeArena(),
+		arena: types.NewNodeArenaAdaptive(len(input)),
 	}
 
 	// Read the first token
