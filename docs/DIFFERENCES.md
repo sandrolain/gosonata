@@ -1043,7 +1043,7 @@ result, err := eval.Eval(ctx, expr, data)
 
 1. **Streaming API** — `gosonata.EvalStream` / `evaluator.EvalStream` (NDJSON, context-aware)
 2. **Custom Functions** — `gosonata.WithCustomFunction` / `evaluator.WithCustomFunction`
-3. **Expression Caching** — LRU cache via `WithCaching` / `WithCacheSize`
+3. **Expression Caching** — lock-free FIFO cache via `WithCaching` / `WithCacheSize`
 
 ### Planned (Phase 8+)
 

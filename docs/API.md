@@ -597,7 +597,7 @@ Enables result caching for repeated queries.
 eval := evaluator.New(evaluator.WithCaching(true))
 ```
 
-**Note**: When enabled, compiled expressions are cached in an LRU cache (default 256
+**Note**: When enabled, compiled expressions are cached in a lock-free FIFO cache (default 256
 entries). Cache size can be tuned with `WithCacheSize`. The top-level `gosonata.Eval`
 also benefits when `WithCaching(true)` is passed.
 
@@ -612,7 +612,7 @@ Sets the maximum number of cached compiled expressions. Only meaningful when
 
 **Parameters**:
 
-- `size`: Maximum number of entries in the LRU cache
+- `size`: Maximum number of entries in the cache
 
 **Default**: `256`
 
@@ -628,15 +628,15 @@ eval := evaluator.New(
 #### WithCache
 
 ```go
-func WithCache(c *cache.Cache) EvalOption
+func WithCache(c cache.Cacher) EvalOption
 ```
 
-Attaches an external `*cache.Cache` instance. The evaluator uses it regardless of
+Attaches an external cache implementing the `cache.Cacher` interface. The evaluator uses it regardless of
 the `WithCaching` flag, enabling shared caches across multiple `Evaluator` instances.
 
 **Parameters**:
 
-- `c`: Pre-built `*cache.Cache` (see `pkg/cache`)
+- `c`: A `*cache.BoundedCache` (or any `cache.Cacher` implementation) — see `pkg/cache`
 
 **Example**:
 

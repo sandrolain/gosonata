@@ -51,7 +51,7 @@ func TestCacheMiss(t *testing.T) {
 	}
 }
 
-func TestCacheLRUEviction(t *testing.T) {
+func TestCacheEviction(t *testing.T) {
 	c := cache.New(3)
 	for _, k := range []string{"a", "b", "c", "d"} {
 		expr, _ := parser.Compile("$.x")
@@ -61,7 +61,7 @@ func TestCacheLRUEviction(t *testing.T) {
 		t.Fatalf("expected 3 entries after eviction, got %d", got)
 	}
 	if _, ok := c.Get("a"); ok {
-		t.Fatal(`expected "a" to be evicted (LRU)`)
+		t.Fatal(`expected "a" to be evicted (FIFO oldest)`)
 	}
 	if _, ok := c.Get("d"); !ok {
 		t.Fatal(`expected most-recently-inserted "d" to survive`)

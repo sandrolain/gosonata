@@ -143,7 +143,7 @@ gosonata/
 │   │   └── errors.go        # Error types & codes
 │   │
 │   ├── runtime/             # Runtime utilities
-│   └── cache/               # LRU expression cache
+│   └── cache/               # Lock-free FIFO expression cache
 │
 ├── cmd/
 │   └── wasm/
@@ -937,25 +937,33 @@ func (r *FunctionRegistry) Lookup(name string) (BuiltinFunc, bool) {
 #### Expression Cache (`pkg/cache`)
 
 ```go
-// Thread-safe LRU cache for compiled expressions.
-type Cache struct {
-    mu       sync.RWMutex
-    capacity int
-    ll       *list.List
-    items    map[string]*list.Element
+// Cacher is the interface implemented by all cache strategies.
+type Cacher interface {
+    Get(key string) (*types.Expression, bool)
+    Set(key string, expr *types.Expression)
+    GetOrCompile(key string, compile func() (*types.Expression, error)) (*types.Expression, error)
+    Len() int
+    Capacity() int
+    Invalidate(key string)
+    Clear()
 }
 
-func New(capacity int) *Cache
-func (c *Cache) Get(key string) (*types.Expression, bool)
-func (c *Cache) Set(key string, expr *types.Expression)
-func (c *Cache) GetOrCompile(key string, compile func() (*types.Expression, error)) (*types.Expression, error)
-func (c *Cache) Len() int
-func (c *Cache) Invalidate(key string)
-func (c *Cache) Clear()
+// BoundedCache: FIFO eviction, lock-free reads via atomic.Pointer.
+// Writes serialized by sync.Mutex; snapshot replaced atomically.
+type BoundedCache struct { /* ... */ }
+
+func New(capacity int) *BoundedCache
+func (c *BoundedCache) Get(key string) (*types.Expression, bool)  // lock-free
+func (c *BoundedCache) Set(key string, expr *types.Expression)     // mutex-serialized
+func (c *BoundedCache) GetOrCompile(key string, compile func() (*types.Expression, error)) (*types.Expression, error)
+func (c *BoundedCache) Len() int
+func (c *BoundedCache) Invalidate(key string)
+func (c *BoundedCache) Clear()
+func (c *BoundedCache) Stats() CacheStats
 ```
 
 Enabled via `evaluator.WithCaching(true)` or `evaluator.WithCacheSize(n)`.
-The default cache holds 256 entries with LRU eviction.
+The default cache holds 256 entries with FIFO eviction and lock-free reads (~52 ns/op parallel).
 
 ### Race Condition Prevention
 
@@ -1004,7 +1012,7 @@ func WithMeter(meter metric.Meter) EvalOption
 
 #### Phase 7 (✅ Complete)
 
-- LRU expression cache (`pkg/cache`) with `WithCaching` / `WithCacheSize` / `WithCache` options
+- Expression cache (`pkg/cache`) with `WithCaching` / `WithCacheSize` / `WithCache` options
 - Custom function registration via `WithCustomFunction` / `WithFunctions` / `CustomFunc` / `AdvancedCustomFunc`
 - Streaming API: `evaluator.EvalStream` / `gosonata.EvalStream` (NDJSON, context-aware)
 - Performance optimisations: lazy `EvalContext.bindings`, `bufPool`, regex `sync.Map`, pre-allocation in object constructors
