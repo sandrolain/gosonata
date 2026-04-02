@@ -1,5 +1,9 @@
 # GoSonata
 
+> [!WARNING]
+> This project was an experiment to test the use of the Copilot/Sonnet agent to build the Go version of JSONata.
+> For a stable and maintained Go port, see [gnata](https://github.com/RecoLabs/gnata).
+
 [![Go Version](https://img.shields.io/github/go-mod/go-version/sandrolain/gosonata)](https://go.dev/doc/go1.26)
 [![GoDoc](https://godoc.org/github.com/sandrolain/gosonata?status.svg)](https://godoc.org/github.com/sandrolain/gosonata)
 <!--[![Test](https://github.com/sandrolain/gosonata/workflows/Test/badge.svg)](https://github.com/sandrolain/gosonata/actions?query=workflow%3ATest)
